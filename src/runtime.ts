@@ -37,8 +37,13 @@ export async function resolveRaster(opts: ParseOptions): Promise<RasterAdapter> 
   if (opts.raster) return opts.raster;
 
   if (isBrowser()) {
-    // Step 2: dynamic import("./raster/canvas.js").
-    return noneRaster;
+    // Step 2: load the dependency-free Canvas raster adapter (OffscreenCanvas / <canvas>).
+    try {
+      const m = await import("./raster/canvas.js");
+      return m.canvasRaster;
+    } catch {
+      return noneRaster;
+    }
   }
   if (isNode()) {
     // Step 3: try dynamic import("./raster/sharp.js"), fall back to none on failure.
@@ -53,7 +58,9 @@ export async function resolveOcr(opts: ParseOptions): Promise<OcrEngine> {
   if (opts.ocr === "off") return noneOcr;
 
   if (isBrowser()) {
-    // Step 4: prefer RapidOCR when available; step 2 also offers a VLM engine.
+    // Step 4 will prefer RapidOCR here. The VLM gateway is used as the OCR fallback
+    // by the pipeline directly (see pipeline.readImageBytes), so no engine is needed
+    // for VLM-only flows.
     return noneOcr;
   }
   // Node / Deno: no local OCR engine shipped; rely on the injected VLM gateway.

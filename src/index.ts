@@ -10,6 +10,7 @@
  */
 
 export { parseDocument } from "./pipeline.js";
+export { createVlmOcrEngine } from "./ocr/vlm.js";
 export type {
   ParseOptions,
   ParsedDocument,
@@ -21,7 +22,12 @@ export type {
   PreprocessOptions,
   OcrEngine,
   OcrContext,
+  OcrResult,
   VlmGateway,
+  VlmReadOptions,
+  PdfDocumentLike,
+  PdfPageLike,
+  PdfLibrary,
 } from "./types.js";
 
 export const VERSION = "0.1.0";
