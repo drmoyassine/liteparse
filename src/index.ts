@@ -11,6 +11,9 @@
 
 export { parseDocument } from "./pipeline.js";
 export { createVlmOcrEngine } from "./ocr/vlm.js";
+export { createRapidOcrEngine } from "./ocr/rapidocr.js";
+export type { OcrRunner, RapidOcrOptions } from "./ocr/rapidocr.js";
+export { setBrowserOcrEngine, getBrowserOcrEngine } from "./runtime.js";
 export type {
   ParseOptions,
   ParsedDocument,

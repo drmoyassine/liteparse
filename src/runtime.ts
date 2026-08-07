@@ -52,15 +52,31 @@ export async function resolveRaster(opts: ParseOptions): Promise<RasterAdapter> 
   return noneRaster;
 }
 
+/**
+ * One-time browser OCR registry. A consumer wires a real OCR engine (e.g. RapidOCR
+ * via {@link createRapidOcrEngine}) once at app start; `parseDocument` then uses it
+ * automatically when `ocr: "auto"` (the default). Stays `null` otherwise, so the
+ * pipeline falls through to the injected VLM gateway.
+ */
+let registeredBrowserOcr: OcrEngine | null = null;
+
+export function setBrowserOcrEngine(engine: OcrEngine | null): void {
+  registeredBrowserOcr = engine;
+}
+
+export function getBrowserOcrEngine(): OcrEngine | null {
+  return registeredBrowserOcr;
+}
+
 /** Resolve an OCR engine: explicit injection wins; "off" or nothing → `none`. */
 export async function resolveOcr(opts: ParseOptions): Promise<OcrEngine> {
   if (opts.ocrEngine) return opts.ocrEngine;
   if (opts.ocr === "off") return noneOcr;
 
   if (isBrowser()) {
-    // Step 4 will prefer RapidOCR here. The VLM gateway is used as the OCR fallback
-    // by the pipeline directly (see pipeline.readImageBytes), so no engine is needed
-    // for VLM-only flows.
+    // Use the registered local OCR engine (RapidOCR/PaddleOCR via onnxruntime-web)
+    // when present; otherwise rely on the VLM gateway fallback in the pipeline.
+    if (registeredBrowserOcr) return registeredBrowserOcr;
     return noneOcr;
   }
   // Node / Deno: no local OCR engine shipped; rely on the injected VLM gateway.

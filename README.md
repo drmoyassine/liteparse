@@ -54,7 +54,7 @@ The vision-LLM gateway is injected, so the library ships zero provider coupling.
 import { parseDocument, type VlmGateway } from "liteparse";
 
 const vlm: VlmGateway = {
-  async readImage(png, hint) {
+  async readImage(png) {
     const text = await fetch("/api/parse-document/vlm", {
       method: "POST",
       body: png,                       // POST the PNG bytes
@@ -73,10 +73,41 @@ See `src/examples/` for a browser gateway and a server gateway (Vercel AI SDK / 
 | Interface | Browser | Node | Deno/edge |
 | --- | --- | --- | --- |
 | `RasterAdapter` | Canvas (`OffscreenCanvas`/`<canvas>`) | Sharp (`liteparse/raster/sharp`) | none → VLM |
-| `OcrEngine` | RapidOCR (`liteparse/ocr/rapidocr`) or VLM | VLM | VLM |
+| `OcrEngine` | RapidOCR (runner-injected) or VLM | VLM | VLM |
 | `VlmGateway` | injected (→ your backend) | injected (→ your AI gateway) | injected |
 
-`ocr: "auto"` (default) picks RapidOCR when registered + browser, else VLM when a gateway is supplied, else `none`. Any engine returning empty/error for a page falls through to the VLM gateway when configured.
+`ocr: "auto"` (default) uses a registered local OCR engine (browser) when present, else falls back to the VLM gateway when one is supplied, else `none`. Any engine returning empty/error for a page falls through to the VLM gateway when configured.
+
+### Browser: private OCR (RapidOCR / PaddleOCR, no server round-trip)
+
+There is no official RapidOCR npm package, so liteparse wraps a community browser
+OCR package (e.g. `client-side-ocr`, `@paddleocr/paddleocr-js` — both run
+RapidOCR/PaddleOCR models on `onnxruntime-web`) through an injected runner. Register
+it once at app start and `parseDocument` uses it automatically:
+
+```bash
+npm install client-side-ocr onnxruntime-web
+```
+
+```ts
+import { createOCR } from "client-side-ocr";
+import { createRapidOcrEngine, setBrowserOcrEngine } from "liteparse";
+
+const ocr = await createOCR(); // downloads ONNX models on first use
+setBrowserOcrEngine(
+  createRapidOcrEngine({
+    runner: {
+      async recognize(image) {
+        const bitmap = await createImageBitmap(new Blob([image], { type: "image/png" }));
+        const { text } = await ocr.recognize(bitmap); // adapt to your package's API
+        return { text };
+      },
+    },
+  }),
+);
+```
+
+See `src/examples/rapidocr-runner.browser.ts` for a reusable runner adapter.
 
 ## Limits
 
