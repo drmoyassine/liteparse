@@ -14,7 +14,12 @@ import { defineConfig } from "tsup";
  * explicitly; the core bundle never contains them.
  */
 export default defineConfig({
-  entry: ["src/index.ts"],
+  // `index` is the isomorphic core; `raster/sharp` is an opt-in Node subpath that
+  // pulls native deps (sharp + @napi-rs/canvas) and is never imported by the core.
+  entry: {
+    index: "src/index.ts",
+    "raster/sharp": "src/raster/sharp.ts",
+  },
   format: ["esm", "cjs"],
   dts: true,
   sourcemap: true,

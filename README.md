@@ -12,12 +12,24 @@ npm install liteparse
 npm install pdfjs-dist
 ```
 
-Heavy adapters are opt-in:
+Heavy adapters are opt-in (imported only when you use them):
 ```bash
-# Node raster preprocessing (sharp):
-npm install sharp
+# Node PDF raster preprocessing — needs both (sharp preprocesses/encodes,
+# @napi-rs/canvas is the surface pdfjs renders into):
+npm install sharp @napi-rs/canvas
 # Browser private OCR (RapidOCR via onnxruntime-web):
 npm install onnxruntime-web
+```
+
+### Node: local rasterisation + OCR fallback (no VLM round-trip for rendering)
+
+```ts
+import { parseDocument } from "liteparse";
+import { createSharpRaster } from "liteparse/raster/sharp";
+
+const raster = await createSharpRaster(); // dynamically imports sharp + @napi-rs/canvas
+const { text } = await parseDocument(pdfFile, { raster, vlm });
+// scanned pages are rasterised locally, OCR'd (engine permitting), then VLM'd as fallback
 ```
 
 ## Usage
