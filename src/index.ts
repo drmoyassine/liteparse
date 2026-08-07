@@ -1,0 +1,27 @@
+/**
+ * liteparse — isomorphic document text extraction.
+ *
+ * Public surface is intentionally tiny: `parseDocument` plus the types needed to
+ * implement the swappable adapters (`RasterAdapter`, `OcrEngine`, `VlmGateway`).
+ *
+ * Platform-specific adapters are resolved lazily by `runtime.ts` and never
+ * imported at the top level, so this module is safe to import in the browser,
+ * Node, and Deno without pulling in sharp / onnxruntime-web / pdfjs-dist.
+ */
+
+export { parseDocument } from "./pipeline.js";
+export type {
+  ParseOptions,
+  ParsedDocument,
+  Page,
+  DocKind,
+} from "./types.js";
+export type {
+  RasterAdapter,
+  PreprocessOptions,
+  OcrEngine,
+  OcrContext,
+  VlmGateway,
+} from "./types.js";
+
+export const VERSION = "0.1.0";

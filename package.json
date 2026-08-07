@@ -1,0 +1,71 @@
+{
+  "name": "liteparse",
+  "version": "0.1.0",
+  "description": "Isomorphic document text extraction (PDF, Office, images) with swappable raster/OCR/VLM adapters. Runs in the browser, Node, and Deno/edge.",
+  "type": "module",
+  "license": "MIT",
+  "author": "drmoyassine",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/drmoyassine/liteparse.git"
+  },
+  "homepage": "https://github.com/drmoyassine/liteparse#readme",
+  "bugs": { "url": "https://github.com/drmoyassine/liteparse/issues" },
+  "keywords": [
+    "document",
+    "extraction",
+    "pdf",
+    "docx",
+    "xlsx",
+    "ocr",
+    "vision",
+    "vlm",
+    "isomorphic",
+    "pdfjs"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "mammoth": "^1.12.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "peerDependencies": {
+    "pdfjs-dist": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "pdfjs-dist": { "optional": true }
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "jszip": "^3.10.1",
+    "pdfjs-dist": "^4.8.0",
+    "prettier": "^3.3.3",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}
