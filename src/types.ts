@@ -104,6 +104,26 @@ export interface OcrEngine {
   readonly name: string;
 }
 
+/**
+ * A whole-document OCR provider that reads a file (image or multi-page PDF) in a
+ * single call — e.g. a hosted OCR API. Cheaper than the per-page
+ * raster+OCR path because it skips local rasterisation. Used as an early cascade
+ * slot in {@link parseWithFallbacks} (see `cascade.ts`).
+ *
+ * Implementations must resolve to `{ text: "" }` (not throw) when they cannot read
+ * the document, so the cascade can fall through to the next slot / the heavy path.
+ */
+export interface WholeDocOcrProvider {
+  readonly name: string;
+  parseDoc(input: {
+    bytes?: Uint8Array;
+    /** Public URL of the document — preferred over `bytes` when available. */
+    url?: string;
+    filename?: string;
+    signal?: AbortSignal;
+  }): Promise<{ text: string }>;
+}
+
 /** Options passed to {@link VlmGateway.readImage}. */
 export interface VlmReadOptions {
   pageIndex?: number;
@@ -157,8 +177,6 @@ export interface ParseOptions {
   pdfjs?: PdfLibrary;
   /** Abort parsing. */
   signal?: AbortSignal;
-  /** Minimum non-whitespace chars on a page before its native text is considered present. Default 8. */
-  nativeTextFloor?: number;
   /** Minimum chars of OCR output before the page is considered well-read. Below this → VLM fallback. Default 3. */
   ocrFloor?: number;
 }

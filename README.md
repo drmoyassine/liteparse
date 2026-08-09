@@ -4,6 +4,8 @@ Isomorphic document text extraction — one entry point, runs unchanged in the *
 
 Extracts text from PDFs (native + OCR + VLM fallback), Office files (`.docx`/`.xlsx`/`.csv`), and images, behind a single `parseDocument()` call. Platform-specific work (image rasterising, OCR, vision-LLM fallback) is done through **swappable adapters** that are auto-detected per runtime, so the same code parses a digital PDF in Node and a scanned passport in the browser.
 
+> **Status:** `0.2.0` ships the linear OCR cascade (pdfjs native text → ocr.space / RapidOCR → VLM fallback) with the Node `rapidocr-server` runner. The next major work is the **Intelligent Document Router** (`0.3.0+`) — see [ARCHITECTURE.md](./ARCHITECTURE.md) for the design and [ROADMAP.md](./ROADMAP.md) for the parallelizable build plan.
+
 ## Install
 
 ```bash
@@ -17,6 +19,8 @@ Heavy adapters are opt-in (imported only when you use them):
 # Node PDF raster preprocessing — needs both (sharp preprocesses/encodes,
 # @napi-rs/canvas is the surface pdfjs renders into):
 npm install sharp @napi-rs/canvas
+# Node OCR (RapidOCR via onnxruntime-node):
+npm install onnxruntime-node
 # Browser private OCR (RapidOCR via onnxruntime-web):
 npm install onnxruntime-web
 ```
@@ -26,10 +30,21 @@ npm install onnxruntime-web
 ```ts
 import { parseDocument } from "liteparse";
 import { createSharpRaster } from "liteparse/raster/sharp";
+import { createRapidOcrServerEngine } from "liteparse/ocr/rapidocr-server";
 
-const raster = await createSharpRaster(); // dynamically imports sharp + @napi-rs/canvas
-const { text } = await parseDocument(pdfFile, { raster, vlm });
-// scanned pages are rasterised locally, OCR'd (engine permitting), then VLM'd as fallback
+const raster = await createSharpRaster();          // dynamically imports sharp + @napi-rs/canvas
+const ocrEngine = await createRapidOcrServerEngine(); // loads ONNX models (warm singleton)
+const { text } = await parseDocument(pdfFile, { raster, ocrEngine, vlm });
+// scanned pages are rasterised locally, OCR'd, then VLM'd as fallback
+```
+
+### Low-level: the OCR cascade
+
+For server/edge pipelines that want explicit control over the fallback order, `parseWithFallbacks` runs an ordered list of slots and keeps the first one that yields text:
+
+```ts
+import { parseWithFallbacks } from "liteparse";
+// slots: whole-doc OCR (e.g. ocr.space) → per-page raster+OCR → VLM
 ```
 
 ## Usage
@@ -66,14 +81,14 @@ const vlm: VlmGateway = {
 const { text } = await parseDocument(imageFile, { vlm });
 ```
 
-See `src/examples/` for a browser gateway and a server gateway (Vercel AI SDK / OpenAI-compatible `image_url` block).
+See `src/examples/` for a browser gateway and a server gateway (OpenAI-compatible `image_url` block).
 
 ## Adapters
 
 | Interface | Browser | Node | Deno/edge |
 | --- | --- | --- | --- |
 | `RasterAdapter` | Canvas (`OffscreenCanvas`/`<canvas>`) | Sharp (`liteparse/raster/sharp`) | none → VLM |
-| `OcrEngine` | RapidOCR (runner-injected) or VLM | VLM | VLM |
+| `OcrEngine` | RapidOCR (runner-injected) or VLM | RapidOCR (`liteparse/ocr/rapidocr-server`) or VLM | VLM |
 | `VlmGateway` | injected (→ your backend) | injected (→ your AI gateway) | injected |
 
 `ocr: "auto"` (default) uses a registered local OCR engine (browser) when present, else falls back to the VLM gateway when one is supplied, else `none`. Any engine returning empty/error for a page falls through to the VLM gateway when configured.
@@ -108,6 +123,18 @@ setBrowserOcrEngine(
 ```
 
 See `src/examples/rapidocr-runner.browser.ts` for a reusable runner adapter.
+
+## Roadmap — Intelligent Document Router (`0.3.0+`)
+
+Today every document runs the same fixed cascade. The router **classifies once** (type, page count, scanned/digital, script/language) **then routes once** to the optimal strategy, replacing brute-force timeout fallback. Highlights:
+
+- **Web Worker** owns the browser OCR pipeline (ONNX + `OffscreenCanvas`, never blocks the UI)
+- **Tiered model downloads**: detection + Latin recognition (~16MB) for all devices; Granite-Docling-258M (~130–258MB) for WebGPU devices only
+- **Latin + 1 dynamic language** in the browser; all other languages permanently on the edge
+- **Granite-Docling-258M** as a local structure-aware VLM between RapidOCR and the hosted VLM, shrinking hosted-VLM usage to <5%
+- **ocr.space removed**; RapidOCR replaces it everywhere
+
+➡️ Full design: [ARCHITECTURE.md](./ARCHITECTURE.md) · Build plan (parallelized for multi-agent execution): [ROADMAP.md](./ROADMAP.md)
 
 ## Limits
 

@@ -19,12 +19,14 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     "raster/sharp": "src/raster/sharp.ts",
+    "ocr/rapidocr-server": "src/ocr/rapidocr-server.ts",
+    "vlm/server": "src/examples/vlm-gateway.server.ts",
   },
   format: ["esm", "cjs"],
   dts: true,
   sourcemap: true,
   clean: true,
-  external: ["pdfjs-dist", "sharp", "@napi-rs/canvas", "onnxruntime-web"],
+  external: ["pdfjs-dist", "sharp", "@napi-rs/canvas", "onnxruntime-web", "onnxruntime-node"],
   // Keep the ESM dynamic-import graph intact (adapters load on demand).
   splitting: false,
 });

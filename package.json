@@ -1,6 +1,6 @@
 {
   "name": "liteparse",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Isomorphic document text extraction (PDF, Office, images) with swappable raster/OCR/VLM adapters. Runs in the browser, Node, and Deno/edge.",
   "type": "module",
   "license": "MIT",
@@ -10,7 +10,9 @@
     "url": "git+https://github.com/drmoyassine/liteparse.git"
   },
   "homepage": "https://github.com/drmoyassine/liteparse#readme",
-  "bugs": { "url": "https://github.com/drmoyassine/liteparse/issues" },
+  "bugs": {
+    "url": "https://github.com/drmoyassine/liteparse/issues"
+  },
   "keywords": [
     "document",
     "extraction",
@@ -39,13 +41,29 @@
       "types": "./dist/raster/sharp.d.ts",
       "import": "./dist/raster/sharp.js",
       "require": "./dist/raster/sharp.cjs"
+    },
+    "./ocr/rapidocr-server": {
+      "types": "./dist/ocr/rapidocr-server.d.ts",
+      "import": "./dist/ocr/rapidocr-server.js",
+      "require": "./dist/ocr/rapidocr-server.cjs"
+    },
+    "./vlm/server": {
+      "types": "./dist/vlm/server.d.ts",
+      "import": "./dist/vlm/server.js",
+      "require": "./dist/vlm/server.cjs"
     }
   },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist", "README.md", "LICENSE"],
-  "engines": { "node": ">=18" },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
@@ -59,14 +77,22 @@
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "peerDependencies": {
+    "onnxruntime-node": ">=1.20",
     "pdfjs-dist": ">=4"
   },
   "peerDependenciesMeta": {
-    "pdfjs-dist": { "optional": true }
+    "pdfjs-dist": {
+      "optional": true
+    },
+    "onnxruntime-node": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^22.7.0",
+    "fake-indexeddb": "^6.0.0",
     "jszip": "^3.10.1",
+    "onnxruntime-node": "^1.27.0",
     "pdfjs-dist": "^4.8.0",
     "prettier": "^3.3.3",
     "tsup": "^8.3.0",
