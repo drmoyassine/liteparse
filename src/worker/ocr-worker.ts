@@ -560,10 +560,22 @@ async function handleParse(req: ParseRequest): Promise<void> {
 }
 
 function installWorker(): void {
+  console.log("[installWorker] installing onmessage handler; isWorkerScope() was true");
   const scope = workerScope();
   scope.onmessage = (ev: { data: unknown }) => {
     const msg = ev.data as WorkerInbound | undefined;
-    if (!msg || typeof msg !== "object") return;
+    // Capture the type BEFORE the union-narrowing branches below exhaust `WorkerInbound`
+    // to `never`, so the final "unrecognized type" diagnostic can still read it.
+    const rawType = (msg as { type?: unknown } | undefined)?.type;
+    const rawId = (msg as { id?: unknown } | undefined)?.id;
+    // ALWAYS log message arrival (before the type check) so a broken/overwritten handler
+    // or a malformed payload is visible. The #1 symptom this catches: a worker that loads
+    // and installs onmessage but where handleParse never runs (message never matched).
+    console.log("[worker onmessage] dispatch", { type: rawType, id: rawId });
+    if (!msg || typeof msg !== "object") {
+      console.log("[worker onmessage] non-object/null message, ignoring", { msg });
+      return;
+    }
     if (msg.type === "cancel") {
       inflight.get(msg.id)?.abort();
       inflight.delete(msg.id);
@@ -571,10 +583,16 @@ function installWorker(): void {
     }
     if (msg.type === "parse") {
       void handleParse(msg);
+      return;
     }
+    console.log("[worker onmessage] UNRECOGNIZED message type, ignoring", { type: rawType });
   };
+  console.log("[installWorker] onmessage assigned; typeof:", typeof scope.onmessage);
 }
 
 if (isWorkerScope()) {
+  console.log("[ocr-worker] worker scope detected, calling installWorker()");
   installWorker();
+} else {
+  console.log("[ocr-worker] NOT a worker scope (isWorkerScope=false); onmessage NOT installed");
 }

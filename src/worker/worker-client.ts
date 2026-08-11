@@ -145,18 +145,36 @@ export function createWorkerOcrClient(opts: WorkerOcrClientOptions): WorkerOcrCl
     }
   });
 
-  worker.addEventListener("error", () => {
-    // Worker crashed/hard-errored: reject every pending job.
+  worker.addEventListener("error", (ev) => {
+    // Worker crashed/hard-errored (script error, module-eval failure, uncaught throw).
+    // Surface the real ErrorEvent details — without this a worker that fails to evaluate
+    // its module shows up only as a silent 60s timeout at the call site, indistinguishable
+    // from a hang. The listener type is loose ({ data? }) because WorkerLike is shared with
+    // the message path; cast to read the ErrorEvent fields.
+    const e = ev as unknown as {
+      message?: string;
+      filename?: string;
+      lineno?: number;
+      colno?: number;
+      error?: { stack?: string; message?: string };
+    };
+    console.error(
+      "[worker-client] Worker error event:",
+      e.message,
+      e.filename ? `${e.filename}:${e.lineno}:${e.colno}` : "",
+      e.error?.stack ?? e.error ?? "",
+    );
     for (const [id, job] of pending) {
       finish(id);
-      job.reject(new Error("worker error"));
+      job.reject(new Error(`worker error: ${e.message ?? "unknown"}`));
     }
   });
 
-  worker.addEventListener("messageerror", () => {
+  worker.addEventListener("messageerror", (ev) => {
     // Worker posted a message that couldn't be deserialised (non-cloneable /
     // cyclic). The job that produced it will never get a result, so fail every
     // pending job rather than leave any hanging. (P4 / R2-I.)
+    console.error("[worker-client] Worker messageerror (deserialization failed):", ev);
     for (const [id, job] of pending) {
       finish(id);
       job.reject(new Error("worker message deserialization failed"));
@@ -223,6 +241,13 @@ export function createWorkerOcrClient(opts: WorkerOcrClientOptions): WorkerOcrCl
         route: input.route,
       };
       // Transfer the underlying buffer (zero-copy when not a subarray).
+      console.log("[worker-client] postMessage parse", {
+        id,
+        byteLength: owned.byteLength,
+        filename: input.filename,
+        profileKind: input.profile?.kind,
+        strategyEngines: input.route?.strategies?.map((s) => s.engine),
+      });
       worker.postMessage(request, [request.bytes]);
     });
   }
