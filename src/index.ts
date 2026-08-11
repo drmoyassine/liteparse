@@ -26,6 +26,10 @@ export type {
   GraniteSession,
   GraniteDoclingOptions,
 } from "./ocr/granite-docling.js";
+// Browser canvas raster adapter — the consumer-authored Web Worker passes this to
+// configureWorker() so scanned-PDF pages can be rasterized to PNG for OCR. Not in
+// the `exports` subpaths, so re-export here to keep consumers on the public surface.
+export { canvasRaster } from "./raster/canvas.js";
 export { setBrowserOcrEngine, getBrowserOcrEngine } from "./runtime.js";
 export type {
   ParseOptions,
@@ -100,6 +104,7 @@ export { isProgress, isResult, isError } from "./worker/protocol.js";
 export { routeDocument } from "./router/route.js";
 export {
   createWorkerOcrClient,
+  createWorkerOcrSingleton,
 } from "./worker/worker-client.js";
 export type {
   WorkerOcrClient,
@@ -108,6 +113,7 @@ export type {
   ParseInput,
   ParseHandlers,
   ParseResult,
+  WorkerOcrSingleton,
 } from "./worker/worker-client.js";
 export { executeRoute } from "./worker/ocr-worker.js";
 export type {

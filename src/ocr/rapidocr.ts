@@ -25,6 +25,8 @@ export interface OcrRunner {
     image: Uint8Array,
     ctx: { signal?: AbortSignal },
   ): Promise<{ text: string; confidence?: number }>;
+  /** Optional: release model sessions / WASM resources. */
+  dispose?(): void;
 }
 
 export interface RapidOcrOptions {

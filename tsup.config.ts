@@ -16,11 +16,13 @@ import { defineConfig } from "tsup";
 export default defineConfig({
   // `index` is the isomorphic core; `raster/sharp` is an opt-in Node subpath that
   // pulls native deps (sharp + @napi-rs/canvas) and is never imported by the core.
+  // `engines/rapidocr` is the opt-in browser RapidOCR engine (onnxruntime-web + PP-OCRv4).
   entry: {
     index: "src/index.ts",
     "raster/sharp": "src/raster/sharp.ts",
     "ocr/rapidocr-server": "src/ocr/rapidocr-server.ts",
     "vlm/server": "src/examples/vlm-gateway.server.ts",
+    "engines/rapidocr": "src/engines/rapidocr/index.ts",
   },
   format: ["esm", "cjs"],
   dts: true,

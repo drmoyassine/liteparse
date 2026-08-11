@@ -51,6 +51,11 @@
       "types": "./dist/vlm/server.d.ts",
       "import": "./dist/vlm/server.js",
       "require": "./dist/vlm/server.cjs"
+    },
+    "./engines/rapidocr": {
+      "types": "./dist/engines/rapidocr.d.ts",
+      "import": "./dist/engines/rapidocr.js",
+      "require": "./dist/engines/rapidocr.cjs"
     }
   },
   "main": "./dist/index.cjs",
@@ -58,6 +63,7 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "scripts",
     "README.md",
     "LICENSE"
   ],
@@ -70,7 +76,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "postinstall": "node scripts/copy-ort-wasm.mjs && node scripts/copy-pdfjs-worker.mjs"
   },
   "dependencies": {
     "mammoth": "^1.12.0",
@@ -78,6 +85,7 @@
   },
   "peerDependencies": {
     "onnxruntime-node": ">=1.20",
+    "onnxruntime-web": ">=1.20",
     "pdfjs-dist": ">=4"
   },
   "peerDependenciesMeta": {
@@ -86,6 +94,9 @@
     },
     "onnxruntime-node": {
       "optional": true
+    },
+    "onnxruntime-web": {
+      "optional": true
     }
   },
   "devDependencies": {
@@ -93,6 +104,7 @@
     "fake-indexeddb": "^6.0.0",
     "jszip": "^3.10.1",
     "onnxruntime-node": "^1.27.0",
+    "onnxruntime-web": "^1.27.0",
     "pdfjs-dist": "^4.8.0",
     "prettier": "^3.3.3",
     "tsup": "^8.3.0",

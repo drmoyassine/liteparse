@@ -1,313 +1,205 @@
-# liteparse Roadmap — Intelligent Document Router (build plan)
+# liteparse Roadmap — forward plan
 
-> Pairs with [ARCHITECTURE.md](./ARCHITECTURE.md) (the *what*). This file is the
-> *how*: how to build the router as a **long unattended multi-sub-agent workflow**.
-> Each phase is a self-contained fan-out with a hard verification gate, so the
-> whole thing can run with a human checking in only between phases.
-
-## How to read this
-
-- **Phases** are ordered by dependency. A later phase never starts before its
-  predecessor's verification gate is green.
-- Inside a phase, agents tagged **⏵ PARALLEL** have zero inter-dependencies and
-  run concurrently (one agent = one module + its tests). Agents tagged **⏷ SERIAL**
-  must finish before the next begins.
-- **⏦ GATE** = `npm run typecheck && npm run test && npm run build` must pass
-  before the next phase. This is the safety net that makes unattended operation
-  safe — a broken contract surfaces here, not two phases later.
-- Every agent codes against **interfaces locked in Phase 0**, never against
-  another agent's in-flight implementation. That is the single most important
-  rule: parallel agents never read each other's code; they share only contracts.
-
-## Dependency graph
-
-```mermaid
-flowchart TD
-  A0["A0 · contracts (types.ts + protocol.ts)"]:::serial --> G0{{"GATE 0"}}
-  G0 --> A1 & A2 & A3 & A4 & A5 & A6
-  A1["A1 classify.ts"]:::par
-  A2["A2 capabilities.ts"]:::par
-  A3["A3 model-cache.ts"]:::par
-  A4["A4 granite-docling.ts"]:::par
-  A5["A5 remove ocr-space"]:::par
-  A6["A6 language mgmt core"]:::par
-  A1 & A2 & A3 & A4 & A5 & A6 --> G1{{"GATE 1"}}
-  G1 --> A7["A7 route.ts"]:::serial
-  G1 --> A9["A9 worker-client.ts"]:::par
-  A3 & A4 --> A8["A8 ocr-worker.ts"]:::serial
-  A7 & A8 & A9 --> G2{{"GATE 2"}}
-  G2 --> A10["A10 cascade rewire"]:::serial
-  A10 --> G3{{"GATE 3"}}
-  G3 --> R1 & R2 & R3 & R4 & R5
-  R1["R1 review · route matrix"]:::par
-  R2["R2 review · worker races"]:::par
-  R3["R3 review · cache/quota"]:::par
-  R4["R4 review · granite engine"]:::par
-  R5["R5 completeness critic"]:::par
-  R1 & R2 & R3 & R4 & R5 --> G4{{"GATE 4"}}
-  G4 --> S1["S1 clientExtract → router"]:::serial
-  S1 --> S2 & S3
-  S2["S2 classify-on-attach"]:::par
-  S3["S3 edge deploy + retire fn"]:::serial
-  S2 & S3 --> G5{{"GATE 5 · done"}}
-
-  classDef serial fill:#e8f0fe,stroke:#1a73e8;
-  classDef par fill:#e6f4ea,stroke:#188038;
-```
+> **Status:** live. Decided 2026-08-11.
+> The router build (classify→route→execute, browser-first, ocr.space removed) is
+> **complete** — its phase-by-phase build record now lives in
+> [ROUTER_BUILD_PLAN.md](./ROUTER_BUILD_PLAN.md). This file is *what's next*.
+> Pairs with [ARCHITECTURE.md](./ARCHITECTURE.md) (the *what*) and the
+> `ocr-lab/calibrate.ts` calibration harness (the *truth source* for quality gates).
 
 ---
 
-## Phase 0 — Foundation: lock the contracts · ⏷ SERIAL · 1 agent
+## The governing decision — TS-everywhere + the self-host boundary
 
-Everything downstream codes against these. Get them right, or the whole fan-out
-produces incompatible parts.
+Two rules hold the whole plan together. Every track below is shaped by them.
 
-**Agent A0 — contracts**
-- Depends on: nothing (reads ARCHITECTURE.md + existing `types.ts`)
-- Writes:
-  - `src/router/types.ts` — `DocumentProfile` (kind, pages, scanned, script,
-    langHint, size), `RuntimeCapabilities` (runtime, hasWebGPU, metered,
-    browserLanguages[], persisted), `RouteStrategy` (engine + location +
-    reason), `RouteDecision` (ordered `RouteStrategy[]`)
-  - `src/worker/protocol.ts` — the worker↔main message envelope: request
-    (`{type:"parse", bytes, profile, route, id}`), progress
-    (`{type:"progress", pageIndex, totalPages, stage}`), result
-    (`{type:"result", text, source, warnings}`), error (`{type:"error",…}`)
-- Test: types compile; a round-trip of every protocol message type-checks.
-- **Done when**: `tsc --noEmit` clean; ARCHITECTURE's `DocumentProfile` fields
-  and routing inputs are all represented.
-- ⏦ **GATE 0**: typecheck + build green.
+1. **TS-everywhere.** TypeScript across browser → edge → container → GPU worker.
+   Runpod Serverless is the primary GPU target (runtime-agnostic, takes the Docker
+   image as-is); Modal is optional only. Same `.onnx` models run on every tier —
+   only the **execution provider** differs: `onnxruntime-web` (WASM/WebGPU) in the
+   browser, `onnxruntime-node` (+ CUDA EP) in the server worker. The pipeline
+   (classify→route→det→rec→dbPostProcess→reading-order→confidence gate) is reused
+   wholesale; we add execution adapters, we don't rewrite the engine.
+2. **Self-host boundary = perception models only.** The only models that run in our
+   own runtime are OCR and STT. Reasoning (LLM/VLM) stays an **external
+   OpenAI-compatible call**, exactly as today (the agent text LLM and VLM are already
+   external). So "TS-everywhere" ≠ "no LLM in the stack" — it means LLMs stay a
+   one-hop external call. Whisper lands on the self-host side; the LLM stays external.
 
----
-
-## Phase 1 — Parallel module build · ⏵ PARALLEL · 6 agents
-
-All six write **disjoint files**, code only against Phase 0 contracts + existing
-adapters, and each ships its own tests. They can run fully concurrently.
-
-> **Shared-file rule:** no agent in Phase 1 edits `src/index.ts` or
-> `package.json` exports. Each returns its finished source + the exact export
-> lines it needs. The **integration agent in Phase 2** owns the export wiring,
-> so there are never merge conflicts on those two files.
-
-### Agent A1 — `src/router/classify.ts`
-- Depends on: A0 types, existing `sniff.ts`, `pdf.ts`.
-- Writes: `classifyDocument(bytes, filename, opts) → DocumentProfile`.
-  - File type via sniff; page count via `pdfjs.numPages`; scanned/digital via
-    `getTextContent()` char-count probe (>100 digital, <10 scanned, else probe
-    more pages); script hint from a sampled text string.
-- Test: fixtures — a digital PDF (→ scanned=false), a scanned PDF (→ true), an
-  image (→ pages=1), an xlsx (→ kind=xlsx). Assert each profile field.
-- Done when: tests green; classification < ~300ms on fixtures.
-
-### Agent A2 — `src/router/capabilities.ts`
-- Depends on: A0 types only.
-- Writes: `detectCapabilities() → RuntimeCapabilities`.
-  - WebGPU (`navigator.gpu?.requestAdapter()`), runtime sniff
-    (browser/node/deno), connection metered
-    (`navigator.connection.saveData`/`effectiveType`), storage-persist state,
-    available browser languages (read cache index).
-- Test: mock `navigator`/`self.gpu`/`navigator.connection`; assert each branch
-  (hasWebGPU true/false, metered true/false).
-- Done when: tests green; works headless (no GPU → `hasWebGPU:false`).
-
-### Agent A3 — `src/worker/model-cache.ts`
-- Depends on: A0 types only.
-- Writes: IndexedDB wrapper — `getModel(id,version)`, `putModel(id,version,blob)`,
-  `hasModel(id,version)`, `invalidate(id)`, `requestPersistent()`.
-- Test: `fake-indexeddb` polyfill; put→get→has→invalidate round-trip; version
-  mismatch returns miss.
-- Done when: tests green; uses `navigator.storage.persist()` when available.
-- *Note:* add `fake-indexeddb` to devDependencies (single edit, integration agent
-  owns package.json — A3 reports the dep).
-
-### Agent A4 — `src/ocr/granite-docling.ts`
-- Depends on: A0 types + existing `OcrEngine` interface (`types.ts`).
-- Writes: `createGraniteDoclingEngine(opts) → OcrEngine` in two execution modes:
-  - browser: `onnxruntime-web` with WebGPU EP (fallback WASM)
-  - edge: `onnxruntime-node`
-  - Lazy session creation; warm singleton per mode; `recognize()` returns text +
-    structure-aware output.
-- Test: **mock the ONNX session** (inject a fake `InferenceSession` via opts) —
-  assert the engine conforms to `OcrEngine`, handles empty/low-confidence, and
-  falls through cleanly. Real-model inference is **not** tested here (no GPU in
-  CI) — flagged for manual validation in Phase 4.
-- Done when: tests green against the mock; `available` reflects WebGPU presence.
-- *Note:* model URL/version constants live here; download is A8's job via A3.
-
-### Agent A5 — remove ocr-space + cascade cleanup
-- Depends on: A0 types; reads existing `cascade.ts`, `ocr/ocr-space.ts`.
-- Writes/edits: delete `src/ocr/ocr-space.ts`; remove the whole-doc OCR slot from
-  `cascade.ts` (the cascade now starts at per-page raster+OCR); remove the
-  `./ocr/ocr-space` export from `package.json` (reports it to integration agent).
-- Test: `parseWithFallbacks` still resolves text from a fixture via the
-  remaining slots; the ocr-space import path 404s (proves removal).
-- Done when: tests green; no reference to ocr.space remains in `src/`.
-
-### Agent A6 — language management core
-- Depends on: A0 types; existing `rapidocr.ts` (reads its model-id conventions).
-- Writes: `src/router/languages.ts` — script detection
-  (`detectScript(text) → "latin"|"arabic"|"cjk"|"cyrillic"|...`), model-id
-  selection (`scriptToRecModel(script)`), and the **Latin + 1 dynamic** cap logic:
-  `decideBrowserLanguages(detected, cached) → {load, offloadToEdge}`.
-- Test: pure-logic tests — detect script from sample strings; assert a 3rd
-  distinct script triggers `offloadToEdge`; assert Latin never offloads.
-- Done when: tests green; the cap rule matches ARCHITECTURE's language section.
-
-⏦ **GATE 1**: typecheck + test + build green across all six modules.
+**Honest ceiling this accepts:** Whisper via `onnxruntime-node` is good, not best (no
+`faster-whisper`). Fine for voice-note clips; bulk long-form would use the external
+STT fallback. OCR is first-class on every tier.
 
 ---
 
-## Phase 2 — Integration wiring · mixed · 3 agents
+## Tracks (priority order)
 
-Stitch the Phase 1 modules together. A7 and A9 are independent of each other;
-A8 waits on A3 + A4.
+### Track 1 — int8 quantization + recalibration · `[FOUNDATION]`
 
-### Agent A7 — `src/router/route.ts` · ⏷ SERIAL
-- Depends on: A1 (classify output shape), A2 (capabilities shape), A0, A6.
-- Writes: `routeDocument(profile, capabilities, opts) → RouteDecision`.
-  Encodes the ARCHITECTURE routing matrix as pure rules → ordered
-  `RouteStrategy[]` (e.g. image + Latin → `[rapidocr-browser]`; scanned PDF
-  >threshold → `[rapidocr-edge, granite-edge, vlm-edge]`).
-- Test: one assertion per **row of the routing matrix** (a table-driven test) —
-  each (type, pages, scanned, script) input yields the expected strategy list.
-  This test is the executable spec of the router.
-- Done when: every matrix row passes.
+**Why first:** it's the force-multiplier. Smaller/faster models benefit *every* other
+track — two rec models in memory (Track 2), Whisper viable in-browser (Track 3 v1),
+and faster GPU-worker cold starts + more concurrent jobs per GPU (Track 4). int8 pays
+off twice: browser (downloads/cache/RAM) **and** server (cold start, VRAM economics).
 
-### Agent A9 — `src/worker/worker-client.ts` · ⏵ PARALLEL (with A7)
-- Depends on: A0 protocol only.
-- Writes: `createWorkerOcrClient(opts)` — spawns the worker, posts a parse
-  request, surfaces `onProgress` callbacks, returns a `Promise<result>`.
-  Handles worker crash (reject), timeout, and abort.
-- Test: mock worker (a stub that echoes protocol messages); assert progress
-  events fire in order and the result resolves / errors propagate.
-- Done when: tests green.
+**Tasks**
+- [ ] Obtain int8 quantized det + rec artifacts (RapidOCR publishes some; otherwise
+      quantize with `onnxruntime` `quantize_dynamic`). Prefer **dynamic** quantization
+      first (safer accuracy); move to static only if speed is insufficient.
+- [ ] Add an int8 execution variant behind the existing engine interface (precision
+      is a model-artifact property, not a new engine).
+- [ ] **Re-run `scripts/ocr-lab/calibrate.ts` against the int8 model** before trusting
+      the confidence gate — quantization shifts score distributions; the gate is
+      calibrated against the current fp model. Re-derive `OCR_CONFIDENCE_FLOOR` +
+      garbage-ratio thresholds vs vision-model ground truth.
+- [ ] ModelOrigin: serve int8 as a versioned variant (S3 bucket); IndexedDB cache
+      keys must distinguish int8 vs fp (version-skew = silent quality regression).
+- [ ] Bench: warm latency, cold (download) bytes, peak RSS. Target ≥1.5× speedup on
+      the rec pass (CPU/WASM), ~halved model bytes.
 
-### Agent A8 — `src/worker/ocr-worker.ts` · ⏷ SERIAL (after A3, A4)
-- Depends on: A0 protocol, A3 (cache), A4 (granite), existing `rapidocr.ts` +
-  `raster/canvas.ts` + `pdf.ts`.
-- Writes: the worker entry point. Receives `{bytes, profile, route, id}`,
-  executes the `RouteDecision`: pdfjs render → `OffscreenCanvas` → preprocess →
-  the right engine per route, posting `progress` per page and `result` at the
-  end. Pulls models via A3 on demand; triggers lazy downloads (see Phase 1 A6).
-- Test: hard to unit-test a real worker headless — extract a pure
-  `executeRoute(bytes, route, deps)` core and unit-test **that** with injected
-  fake engines + a fake raster. The thin worker shell just wires postMessage →
-  `executeRoute`. Test the core thoroughly; the shell is smoke-tested in Phase 4.
-- Done when: `executeRoute` core tests green.
-
-⏦ **GATE 2**: typecheck + test + build green.
+**Dependencies / blockers:** none — this is the foundation.
+**Done when:** int8 path passes the recalibrated quality gate at parity-or-better vs fp,
+build green, calibration deltas documented.
 
 ---
 
-## Phase 3 — Cascade rewiring · ⏷ SERIAL · 1 agent
+### Track 2 — In-browser bilingual (Latin + Arabic)
 
-The architectural pivot point: `parseDocument` stops brute-forcing and starts
-routing.
+**Why:** real product gap (Arabic documents). Architecture is ready — `DocumentProfile.script`
+already flows through the router; det is script-agnostic, only **rec** is per-script.
 
-### Agent A10 — pipeline + cascade rewire
-- Depends on: A7, A8, A9, A0, A2.
-- Writes/edits: `pipeline.ts` / `cascade.ts` now do **classify → route →
-  execute the ordered strategies** (consuming `routeDocument` +
-  `executeRoute`/worker-client) instead of the linear fallback. Browser path
-  goes through the worker (A9); node/edge path calls the engine cascade directly.
-- Test: end-to-end with **mock engines** — feed a digital-PDF fixture, assert it
-  never touches OCR; feed a scanned-PDF fixture, assert it hits the edge
-  strategy list. Assert `source`/`warnings` reflect the route actually taken.
-- Done when: integration tests green; brute-force fallback code is gone.
+**Tasks**
+- [ ] Add the Arabic rec model + dict (`ar_PP-OCRv4_rec_infer.onnx` + dict) to the
+      ModelOrigin catalog, script-keyed.
+- [ ] `recSession`/`dictChars` → `Map<Script, …>` (the deferred change from the
+      `intelligent-document-router-design` memory). Single active rec session per script.
+- [ ] **Per-document** script routing first: classify once → load one rec model.
+      Covers ~95% of docs at half the complexity. Do NOT start with per-box routing.
+- [ ] (Later) per-box fallback for mixed-script: run Latin, measure garbage ratio,
+      re-run Arabic only on the boxes that failed — not both on everything.
+- [ ] Confidence gate must re-validate per script (Arabic rec confidence distribution
+      ≠ Latin; calibrate separately in `ocr-lab`).
+- [ ] **Telemetry:** VLM-fallback rate by script. If a third language is frequent,
+      adding its model beats paying VLM per doc (fallback is a safety net, not a strategy).
 
-⏦ **GATE 3**: typecheck + test + build green. **At this point liteparse 0.3.0
-is functionally complete** (router + worker + ocr-space removed). Granite is
-real-model-integrated but only mock-tested.
-
----
-
-## Phase 4 — Adversarial verification · ⏵ PARALLEL · 5 agents
-
-Independent reviewers, each a different lens, each trying to break a specific
-concern. Findings become a fix-list; nothing ships until the critics are quiet.
-
-- **R1 — route-matrix critic**: re-derives every routing decision from
-  ARCHITECTURE.md and diffs against A7's table test. Hunt for a matrix cell that
-  produces the wrong engine, an infinite loop, or a dead strategy.
-- **R2 — worker-race critic**: stress A8/A9 for postMessage ordering, an
-  abort that arrives mid-page, a worker that dies mid-inference, duplicate result
-  posts, unbounded progress spam.
-- **R3 — cache/quota critic**: A3 under IndexedDB quota errors, concurrent
-  downloads of the same model, eviction mid-use, version-skew between cached
-  model and engine.
-- **R4 — granite-engine critic**: A4 WebGPU→WASM fallback correctness, session
-  lifecycle/leak, empty/oversized image input, the "no GPU → offload to edge"
-  path.
-- **R5 — completeness critic**: what's missing? (language preseed on app load,
-  `navigator.connection` `change` re-check, error states, abort propagation
-  through the whole chain, the image-escalation heuristic from ARCHITECTURE.)
-
-⏦ **GATE 4**: all critics either pass or file verified, non-blocking findings;
-typecheck + test + build still green.
+**Dependencies / blockers:** benefits hugely from Track 1 (two rec models in memory →
+int8 smaller is the difference between fits and OOM on mid-range hardware).
+**Done when:** an Arabic scanned PDF extracts cleanly via the browser path at quality
+parity with the Latin baseline (calibrated), no VLM on the happy path.
 
 ---
 
-## Phase 5 — Studygram integration · ⏷ SERIAL-ish · 3 agents
+### Track 3 — litecomposer (speech)
 
-Touches `studygram-app`. Depends on liteparse 0.3.0 being cut (GATE 4). Run in
-the studygram-app repo, not liteparse.
+**Why:** turns liteparse from doc→text into media→text. The architecture (worker,
+ModelOrigin, IndexedDB cache, router) maps directly onto audio. **Phased** — ship the
+cheap half now, the local-model half later.
 
-### Agent S1 — `clientExtract.ts` → router flow · ⏷ SERIAL
-- Replaces the 3-tier brute-force fallback in `src/lib/clientExtract.ts` with
-  the router: classify (on the bytes) → route → worker-client (browser) or edge
-  call. Keeps the existing VLM-edge delegation contract.
+**v0 — ships now (no model, no WebGPU):**
+- [ ] Web Speech API **live dictation** (mic button → text streams into composer with
+      interim results). Note: Web Speech API is **vendor-cloud**, not a local model —
+      closer to an external API call than to RapidOCR. Live-mic only, not file/blob.
+      Firefox support absent. Treat as an *input method beside the pipeline*, not a
+      stage inside it.
+- [ ] **External OpenAI-compatible STT fallback** for files (`/v1/audio/transcriptions`).
+      Route through the **same gateway pattern** as the VLM fallback
+      (`app_settings.parse_vlm_account_id` → add `stt_account_id`). One external-model
+      gateway abstraction, not a second parallel path.
+- [ ] Graceful "mic/API not supported" → user types.
 
-### Agent S2 — classify-on-attach · ⏵ PARALLEL (with S3, after S1)
-- In `AgentChatPanel.tsx`, kick off `classifyDocument` at attach time (overlaps
-  user typing) so the route is decided before send. Surface per-page progress
-  via the worker-client `onProgress` (replaces the current `ingestionProgress`).
+**v1 — ultimate vision (local in-browser Whisper):**
+- [ ] **BLOCKED on the WebGPU compute backend existing** (see Cross-cutting: WebGPU is
+      its own line, NOT folded into Track 1's int8 work). WASM Whisper is
+      slower-than-real-time past tiny; WebGPU is the gate.
+- [ ] Whisper in a Web Worker via the existing primitives (ModelOrigin, cache, singleton).
+      Use `onnxruntime-web` WebGPU EP on the whisper.onnx model.
+- [ ] **STT confidence gate** mirroring the OCR one — Whisper gives per-segment
+      probabilities; gate on them. Build `stt-lab` calibration harness (analog of
+      `ocr-lab`) to set "good enough vs fall back to external STT" thresholds.
+- [ ] Engine dispose/evict: a Whisper session + OCR session in one tab is heavy —
+      LRU evict or explicit dispose (the deferred engine-lifecycle work, repurposed).
 
-### Agent S3 — edge deploy + retire parse-document · ⏷ SERIAL
-- Deploy the edge with RapidOCR + Granite models and `RAPIDOCR_LANGUAGES`;
-  retire the `parse-document` edge function. Per memory, Claude deploys edge
-  functions directly via the Supabase Management API (multipart POST,
-  `api.supabase.com`), never via Lovable; use the Supabase MCP, not the CLI;
-  model keys stay server-side (Granite model is **downloaded at runtime**, never
-  bundled into the client).
-
-⏦ **GATE 5 · DONE**: Studygram builds, attachments route through the
-intelligent router end-to-end, parse-document retired.
+**Dependencies / blockers:** v1 blocked on WebGPU. Both phases benefit from Track 1
+(Whisper at fp is too heavy; int8 makes it browser-viable).
+**Done when:** v0 — dictation works + file STT via gateway with fallback; v1 — local
+Whisper passes the `stt-lab` gate at parity with external STT on a voice-note corpus.
 
 ---
 
-## Unattended-operation safeguards
+### Track 4 — Hono edge API + Docker + Runpod
 
-1. **Contracts first.** Phase 0 is the only serial bottleneck and it's small.
-   Everything parallel is gated on it. If GATE 0 is green, the fan-out is safe.
-2. **Disjoint files in Phase 1.** Agents never write the same file. `index.ts`
-   and `package.json` are touched by exactly one agent per phase (integration).
-3. **Green gate, not green light.** A phase starts only when the prior gate is
-   `typecheck && test && build` clean. A red gate halts and surfaces to a human.
-4. **Mock the un-mockable.** Real ONNX/WebGPU/IndexedDB-worker behavior can't
-   run in headless CI. Phase 1–3 test against injected fakes; Phase 4 is where
-   logic is adversarially checked; **real-model inference validation is a
-   separate manual/GPU step**, explicitly not part of the unattended run.
-5. **Idempotent agents.** Each agent either writes a finished file or fails —
-   never partially. Re-running an agent reproduces the same output, so a resume
-   after a halt is clean.
+**Why:** turns liteparse from a library into a product external services call. Highest
+commercial value; sharpest technical constraints. **Decided: TS-everywhere** — the GPU
+worker is TS + `onnxruntime-node` (+ CUDA EP), Runpod Serverless primary.
 
-## Translating this to a Workflow run
+**Architecture (two tiers, async between them):**
+- **Edge front-door** (Hono + `@hono/zod-openapi` — OpenAPI is near-free since zod is
+  already used everywhere; header-token auth). Runs on a CF Worker **or** as the `api`
+  container in compose (`@hono/node-server` — same codebase). **No heavy inference
+  here** — a CF Worker OOMs on the first real PDF.
+- **GPU/CPU worker** (the Docker container): pulls jobs, runs liteparse-core with
+  `onnxruntime-node`/CUDA. Same `.onnx` models as the browser, behind the engine interface.
 
-Each phase is one `Workflow` invocation (so a human reviews between phases):
+**Tasks**
+- [ ] **Async job contract first:** `POST /extract` (or `/transcribe`) → `202 + job_id`
+  → `GET /jobs/:id` or webhook. A synchronous edge call can't survive GPU cold-start +
+  inference. Design this on day one or rebuild it later.
+- [ ] **One Dockerfile → N targets:** `docker-compose` (self-host: Hono `api` +
+  TS `worker` + Redis + model volume), Runpod Serverless (same image, GPU, scale-to-zero),
+  Fly/Cloud Run/Railway (CPU middle ground). Modal available via `Image.from_dockerfile`
+  if its cold-start tooling is ever wanted.
+- [ ] **Queue/state infra** (this pulls in the work parked as "separate" in the
+  `liteparse-infra-platform-scope` memory): Redis in compose, Upstash + QStash on the
+  serverless/edge path. Not optional for async jobs.
+- [ ] **Parallelization:** page-level fan-out across N workers, fan-in (queue-backed).
+  The real latency win for big docs on the API tier.
+- [ ] **Cold-start mitigation:** bake models into the image / mount a volume (cold start
+  is model *load*, not download). Decide warm-pool (min-1 always on, costs money, kills
+  latency) vs scale-to-zero (cheap, slow first hit) per tier.
+- [ ] **Auth at scale:** header token to start, then per-consumer API keys + quotas +
+  usage metering. GPU-seconds are expensive — meter or bleed money. Result storage via
+  presigned S3/R2 URL or a TTL'd store.
+- [ ] **Generalize the router** to decide browser-vs-edge-front-door-vs-container (with
+  telemetry on the decision) — the single decision point that keeps the tiers coherent.
 
-- **Phase 0**: `agent(A0-prompt, {schema})` — single serial call.
-- **Phase 1**: `parallel([A1…A6].map(a => () => agent(a.prompt, {schema})))` —
-  the big fan-out. Each agent returns its file source + tests + any dep/edit
-  request; the orchestrator applies them.
-- **Phase 2**: `parallel([A7, A9])` then `agent(A8)` (A8 waits on A3/A4 results
-  from Phase 1, already cached).
-- **Phase 3**: `agent(A10)`.
-- **Phase 4**: `parallel([R1…R5])` → synthesize a fix-list.
-- **Phase 5**: `agent(S1)` → `parallel([S2, S3])`.
+**Dependencies / blockers:** benefits from Track 1 (int8 = faster cold start, more
+jobs/GPU). Pulls in queue infra.
+**Done when:** a clean `docker compose up` runs the full stack locally; one image deploys
+to Runpod and serves an async extract job end-to-end; OpenAPI doc is generated and auth works.
 
-Per-agent prompts are generated from the specs above (depends-on, writes, test,
-done-when). The `schema` for build agents returns `{files:[{path,content}],
-testCommand, testResult, requests:[{editDep?, exportLine?}]}` so the
-orchestrator can apply disjoint writes and collect the integration agent's
-to-do list without merge conflicts.
+---
+
+## Cross-cutting concerns
+
+- **WebGPU is its own line.** int8 (model precision) and WebGPU (execution provider) are
+  **orthogonal** — they compose but are separate projects. Track 3 v1 (local Whisper) is
+  blocked until the WebGPU backend exists. Do NOT let WebGPU get silently absorbed into
+  "int8 work" or Track 3 hits an unstated prerequisite.
+- **Telemetry on fallback rates.** Track 2 (VLM fallback by script), Track 3 (external
+  STT vs local), Track 4 (tier routing decisions). You can't tune thresholds or justify
+  adding models without this. Silent degradation is the failure mode.
+- **Model distribution / versioning.** As models multiply (int8 variants, script-keyed
+  rec, Whisper), the S3→IndexedDB story needs script/precision/version keys + eviction.
+  Tracks 1 & 2 force this plumbing; budget for it inside them.
+- **Carry-over from the router's P5 deferrals** (still-open loose ends — fold in or close):
+  - edge HTTP dispatch for `location:"edge"` strategies → **folds into Track 4.**
+  - forward `strategy.script` to the OCR engine → **folds into Track 2** (per-script rec).
+  - engine `dispose()` lifecycle → **repurposed** for Track 3 v1 (Whisper session evict).
+  - streaming page render (don't buffer all page images) → still valid, low priority.
+  - worker-shell end-to-end integration test → still valid, nice-to-have.
+  - confidence-gated cascade descent (low-confidence → Docling) → **CLOSED** (Docling retired).
+
+---
+
+## How to resume
+
+1. Read this file + [ARCHITECTURE.md](./ARCHITECTURE.md).
+2. **Start at Track 1** (int8). It's the foundation everything compounds off and has no
+   blockers. The truth source for "did int8 break quality?" is `scripts/ocr-lab/calibrate.ts`.
+3. Verification gate (unchanged from the router build): `npm run typecheck && npm run test
+   && npm run build` must be green before a track is considered done.
+4. Studygram-app integration changes (consumer side) happen in the studygram-app repo;
+   liteparse-core changes happen here. The Hono API (Track 4) is likely a new `services/`
+   dir or sibling — decide its home when Track 4 starts.
+5. Relevant memories (studygram-app): `liteparse-roadmap-and-tseverywhere-decision`,
+   `ocr-quality-root-causes-and-lab`, `ocr-latency-fixes`, `intelligent-document-router-design`,
+   `liteparse-infra-platform-scope`, `agent-vision-routing-live` (the gateway pattern Track 3 reuses).

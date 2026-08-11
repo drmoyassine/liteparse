@@ -242,3 +242,71 @@ export function createWorkerOcrClient(opts: WorkerOcrClientOptions): WorkerOcrCl
 
   return { parse, cancel, terminate };
 }
+
+// ── Worker singleton + eager warm-up ───────────────────────────────────────────
+
+/**
+ * Lifecycle wrapper that guarantees at most ONE live {@link WorkerOcrClient} per instance.
+ *
+ * Without this gate, concurrent parse callers each `await` the (async) worker creation
+ * before the first resolves, so each spins up its own `Worker` — and the OCR engine inside
+ * each then compiles a DUPLICATE model session pair (~3s + ~20MB each on RapidOCR).
+ * `createWorkerOcrSingleton` makes every concurrent caller await the SAME in-flight
+ * creation, so exactly one worker + one session set ever exist.
+ *
+ * The consumer owns worker *construction* (the platform-specific `new Worker()` + bundler
+ * `?worker` import + `createWorkerOcrClient(...)`); it passes that as `factory`. The
+ * singleton owns the rest — the lazy singleton, the in-flight Promise gate, the warm-up
+ * trigger, and a `dispose()` for HMR. Trigger *timing* (when to warm up — e.g. on panel
+ * mount) stays in the consumer:
+ *
+ *   import { createWorkerOcrClient, createWorkerOcrSingleton } from "liteparse";
+ *   const ocr = createWorkerOcrSingleton(async () => {
+ *     const { default: W } = await import("./my-ocr.worker.ts?worker");
+ *     return createWorkerOcrClient({ worker: new W(), timeoutMs: 60_000 });
+ *   });
+ *   ocr.warmup();          // on mount — pay the ~3s first-init cost during idle
+ *   const client = await ocr.get();   // shared singleton, one in-flight creation
+ */
+export interface WorkerOcrSingleton {
+  /** Get the shared client, creating it once if needed. Concurrent callers share ONE in-flight creation. */
+  get(): Promise<WorkerOcrClient>;
+  /** Boot the worker + start engine warm-up in the background. Idempotent; never throws. */
+  warmup(): void;
+  /** Terminate the worker and reset, so the next `get()` re-creates. For dev HMR. */
+  dispose(): void;
+}
+
+export function createWorkerOcrSingleton(factory: () => Promise<WorkerOcrClient>): WorkerOcrSingleton {
+  let client: WorkerOcrClient | null = null;
+  let inFlight: Promise<WorkerOcrClient> | null = null;
+
+  function get(): Promise<WorkerOcrClient> {
+    if (client) return Promise.resolve(client);
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      client = await factory();
+      return client;
+    })();
+    // Clear the gate on BOTH success (client is set → the top guard takes over) and
+    // rejection (so the next call retries instead of re-awaiting a rejected promise).
+    void inFlight.finally(() => {
+      inFlight = null;
+    });
+    return inFlight;
+  }
+
+  return {
+    get,
+    warmup() {
+      // Fire-and-forget. A warm-up failure isn't actionable here; the real error
+      // surfaces on the next actual parse attempt (which retries via get()).
+      void get().catch(() => {});
+    },
+    dispose() {
+      client?.terminate();
+      client = null;
+      inFlight = null;
+    },
+  };
+}
