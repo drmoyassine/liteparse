@@ -49,15 +49,35 @@ function toModelUrl(descriptor: ModelDescriptor): string {
   throw new Error(`unknown model id: ${descriptor.id} (add to toModelUrl mapping)`);
 }
 
+/**
+ * Create a public-source model origin with timeout protection.
+ *
+ * Fetches models from HuggingFace with a 30-second timeout. Without this, a
+ * stalled HF connection in production (cold start, network issues) hangs the
+ * worker forever → 60s parse timeout with no diagnostics. The AbortController
+ * forces a loud failure instead.
+ */
 export function createPublicModelOrigin(): ModelOrigin {
   return {
     async fetchModel(d: ModelDescriptor): Promise<Uint8Array> {
       const url = toModelUrl(d);
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`Model fetch ${d.id}@${d.version} → ${url} HTTP ${res.status}`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
+      try {
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (!res.ok) {
+          throw new Error(`Model fetch ${d.id}@${d.version} → ${url} HTTP ${res.status}`);
+        }
+        return new Uint8Array(await res.arrayBuffer());
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          throw new Error(`Model fetch ${d.id}@${d.version} → ${url} timed out after 30s (check network/HF status)`);
+        }
+        throw err;
       }
-      return new Uint8Array(await res.arrayBuffer());
     },
   };
 }

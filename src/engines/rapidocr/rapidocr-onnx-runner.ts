@@ -62,8 +62,8 @@ function dbg(...args: unknown[]): void {
 // which crashes the whole worker on startup and surfaces client-side as a silent
 // 60s parse timeout (the worker never installs its message handler). This is the
 // single most important diagnostic line when diagnosing a "timeout, no runner logs"
-// symptom.
-dbg(
+// symptom. ALWAYS LOGGED (not dbg-gated) so production failures are visible.
+console.log(
   "[rapidocr-onnx-runner] module loaded; ort.env.wasm present:",
   !!ort.env?.wasm,
   "| crossOriginIsolated:", self.crossOriginIsolated,
@@ -253,7 +253,7 @@ export class RapidOcrRunner {
   }
 
   private async doInit(): Promise<void> {
-    dbg("[RapidOcrRunner] init: START");
+    console.log("[RapidOcrRunner] init: START"); // ALWAYS LOGGED (not dbg-gated) for production diagnostics
 
     // Model origin is INJECTED (createRapidOcrRunner({ modelOrigin })), not read from
     // the worker-shell's global config. See the import-block note: importing the shell
@@ -266,14 +266,14 @@ export class RapidOcrRunner {
     const recDescriptor: ModelDescriptor = { id: REC_MODEL_ID, version: MODEL_VERSION };
     const dictDescriptor: ModelDescriptor = { id: DICT_MODEL_ID, version: DICT_VERSION };
 
-    dbg("[RapidOcrRunner] init: resolving 3 models (HF fetch on cache miss)…");
+    console.log("[RapidOcrRunner] init: resolving 3 models (HF fetch on cache miss)…"); // ALWAYS LOGGED
     const t0 = Date.now();
     const [detBytes, recBytes, dictBytes] = await Promise.all([
       resolveModel(detDescriptor, modelOrigin),
       resolveModel(recDescriptor, modelOrigin),
       resolveModel(dictDescriptor, modelOrigin),
     ]);
-    dbg(
+    console.log( // ALWAYS LOGGED
       `[RapidOcrRunner] init: models resolved in ${Date.now() - t0}ms ` +
       `(det=${detBytes.length}B rec=${recBytes.length}B dict=${dictBytes.length}B)`
     );
@@ -324,20 +324,20 @@ export class RapidOcrRunner {
       },
     });
 
-    dbg("[RapidOcrRunner] init: creating det InferenceSession…");
+    console.log("[RapidOcrRunner] init: creating det InferenceSession…"); // ALWAYS LOGGED
     const t1 = Date.now();
     this.detSession = await ort.InferenceSession.create(detBytes);
     // initializeWebAssembly() runs inside the FIRST create; on fallback it resets
     // flags.numThreads = 1 HERE. If this reads 1, threading is off — cross-reference the PROBE.
-    dbg(
+    console.log( // ALWAYS LOGGED
       `[RapidOcrRunner] init: det session created in ${Date.now() - t1}ms (${this.detSession!.inputNames}) ` +
       `| numThreads now: ${ort.env.wasm.numThreads}`
     );
 
-    dbg("[RapidOcrRunner] init: creating rec InferenceSession…");
+    console.log("[RapidOcrRunner] init: creating rec InferenceSession…"); // ALWAYS LOGGED
     const t2 = Date.now();
     this.recSession = await ort.InferenceSession.create(recBytes);
-    dbg(`[RapidOcrRunner] init: rec session created in ${Date.now() - t2}ms (${this.recSession!.inputNames})`);
+    console.log(`[RapidOcrRunner] init: rec session created in ${Date.now() - t2}ms (${this.recSession!.inputNames})`); // ALWAYS LOGGED
 
     // Restore Worker + report pthread spawns. ort inits the WASM runtime (incl. the pthread pool)
     // on the FIRST create, so the spawn count is final by here.

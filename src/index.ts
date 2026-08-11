@@ -20,6 +20,13 @@ export type {
 export { createVlmOcrEngine } from "./ocr/vlm.js";
 export { createRapidOcrEngine } from "./ocr/rapidocr.js";
 export type { OcrRunner, RapidOcrOptions } from "./ocr/rapidocr.js";
+// Browser RapidOCR runner (ONNX-based, HF models + IndexedDB cache). Exported from the
+// main entry so the consumer worker can import from "liteparse" instead of the subpath
+// "liteparse/engines/rapidocr" — vite/rollup fails to bundle subpath exports from
+// symlinked packages (https://github.com/vitejs/vite/issues/...). The runner and model
+// origin factories are the public surface for browser OCR; other internals stay in the
+// engines subpath.
+export { createRapidOcrRunner, createPublicModelOrigin } from "./engines/rapidocr/index.js";
 export { createGraniteDoclingEngine, GRANITE_MODEL } from "./ocr/granite-docling.js";
 export type {
   GraniteModelDescriptor,
