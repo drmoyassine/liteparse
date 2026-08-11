@@ -474,13 +474,17 @@ function buildWorkerDeps(): ExecuteRouteDeps {
 
 /** pdfjs-text extractor: opens the PDF and joins every page's text layer. */
 async function extractPdfText(bytes: Uint8Array, signal?: AbortSignal): Promise<string> {
+  console.log("[extractPdfText] START", { bytes: bytes.length });
   const { doc } = await loadPdf(bytes, workerConfig.pdfjs);
+  console.log("[extractPdfText] PDF opened, numPages:", doc.numPages);
   const parts: string[] = [];
   for (let i = 1; i <= doc.numPages; i++) {
     if (signal?.aborted) throw abortError();
     parts.push(await extractPageText(await doc.getPage(i)));
   }
-  return parts.join("\n\n");
+  const text = parts.join("\n\n");
+  console.log("[extractPdfText] DONE, text length:", text.length);
+  return text;
 }
 
 // ─── worker shell (self-installs only inside a real worker scope) ────────────
@@ -503,6 +507,12 @@ function workerScope(): WorkerScope {
 const inflight = new Map<JobId, AbortController>();
 
 async function handleParse(req: ParseRequest): Promise<void> {
+  console.log("[handleParse] received parse request", {
+    id: req.id,
+    filename: req.filename,
+    kind: req.profile?.kind,
+    strategies: req.route?.strategies?.map((s: { engine?: unknown }) => s.engine),
+  });
   const ac = new AbortController();
   inflight.set(req.id, ac);
   const scope = workerScope();
@@ -538,6 +548,7 @@ async function handleParse(req: ParseRequest): Promise<void> {
       engine: result.engine,
     } satisfies WorkerOutbound);
   } catch (err) {
+    console.error("[handleParse] ERROR", (err as Error)?.message || err, (err as Error)?.stack);
     scope.postMessage({
       type: "error",
       id: req.id,

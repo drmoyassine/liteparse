@@ -104,31 +104,55 @@ class OffscreenCanvasFactory {
   }
 }
 
-/** Load a PDF document from bytes. */
+/**
+ * Load a PDF document from bytes.
+ *
+ * ROOT-CAUSE FIX (nested-worker hang): pdf.js creates a `PDFWorker` inside `getDocument`,
+ * which calls `new Worker(workerSrc, {type:"module"})` — a NESTED worker when we're already
+ * inside a Web Worker. Under production COEP `credentialless`, this nested worker is
+ * constructed successfully (no throw) but silently fails to complete its handshake with
+ * pdf.js, which then waits forever for a "ready" message that never arrives → 60s parse
+ * timeout. (On the MAIN thread, classification works because the CDN workerSrc is
+ * cross-origin under COEP, `new Worker()` throws, and pdf.js falls back to its inline
+ * "fake worker" — but inside a worker the same-origin URL doesn't throw, so no fallback.)
+ *
+ * FIX: when inside a Web Worker, temporarily hide the global `Worker` constructor so
+ * pdf.js's synchronous `typeof Worker !== "undefined"` check (in `PDFWorker._initialize`,
+ * called synchronously by `getDocument`) evaluates false. pdf.js then takes the fake-worker
+ * path: it `import()`s the worker module and runs the parser INLINE on our thread. We're
+ * already on a worker thread — there's zero benefit to spawning another. The fake worker's
+ * `import()` doesn't use the `Worker` constructor, so restoring it in `finally` is safe.
+ * After the first fake-worker setup, pdf.js sets `isWorkerDisabled=true` globally, so
+ * subsequent calls also use the inline parser regardless of restoration.
+ */
 export async function loadPdf(
   bytes: Uint8Array,
   pdfjs?: PdfLibrary,
 ): Promise<{ doc: PdfDocumentLike; lib: PdfLibrary }> {
   const lib = await getPdfjs(pdfjs);
-  // pdfjs TRANSFERS the `data` buffer to its worker thread, detaching it in THIS thread.
-  // Copy first so we never detach the caller's bytes — classifyDocument / executeRoute /
-  // the worker all reuse the input after this returns (e.g. clientExtract hands the same
-  // bytes to the OCR worker via .slice(), and base64-encodes the original for the edge
-  // fallback). Without this copy those would throw "detached ArrayBuffer".
   const params: Record<string, unknown> = { data: bytes.slice() };
-  // Inject the worker-safe factory precisely when pdfjs's DOM default is unavailable
-  // (no `document`) but an `OffscreenCanvas` ctor exists. CAPITAL `CanvasFactory` — pdfjs
-  // reads `params.CanvasFactory` (a constructor) and does `new I({ownerDocument, enableHWA})`;
-  // a lowercase `canvasFactory` instance is never read. See OffscreenCanvasFactory above.
   if (
     typeof (globalThis as { document?: unknown }).document === "undefined" &&
     typeof (globalThis as { OffscreenCanvas?: unknown }).OffscreenCanvas !== "undefined"
   ) {
     params.CanvasFactory = OffscreenCanvasFactory;
   }
-  const loadingTask = lib.getDocument(params);
-  const doc = await loadingTask.promise;
-  return { doc, lib };
+
+  const inWorker = typeof (globalThis as { document?: unknown }).document === "undefined";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g = globalThis as any;
+  const realWorker = inWorker ? g.Worker : undefined;
+  if (realWorker) {
+    console.log("[loadPdf] forcing pdf.js inline (fake-worker) mode — avoiding nested-Worker hang inside Web Worker");
+    g.Worker = undefined;
+  }
+  try {
+    const loadingTask = lib.getDocument(params);
+    const doc = await loadingTask.promise;
+    return { doc, lib };
+  } finally {
+    if (realWorker) g.Worker = realWorker;
+  }
 }
 
 /** Join the text items of a page into a single, whitespace-normalised string. */
