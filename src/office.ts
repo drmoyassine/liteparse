@@ -4,9 +4,10 @@ import * as XLSX from "xlsx";
 /**
  * Office + tabular text extraction (isomorphic: pure JS via mammoth + SheetJS).
  *
- * - `.docx` → mammoth `extractRawText` (mammoth's `openZip` accepts a `buffer`
- *   option that it forwards to JSZip, which accepts a `Uint8Array` unchanged — no
- *   Node `Buffer` needed, so this works in the browser and Deno too)
+ * - `.docx` → mammoth `extractRawText({ arrayBuffer })` — mammoth's BROWSER build
+ *   (what the Web Worker bundles) honours ONLY `arrayBuffer` in `openZip`, NOT
+ *   `buffer` (that's the Node build's `Buffer` reader). JSZip accepts the
+ *   ArrayBuffer unchanged.
  * - `.xlsx` → SheetJS, every sheet rendered to CSV and concatenated with headers
  * - `.csv` / text → decoded as UTF-8 (CSV is returned as-is; the caller treats it as text)
  *
@@ -15,11 +16,19 @@ import * as XLSX from "xlsx";
 
 /** Extract plain text from a `.docx`. */
 export async function extractDocx(bytes: Uint8Array): Promise<string> {
-  // mammoth's `openZip` only honours a `buffer` option (it forwards it to JSZip,
-  // which accepts a `Uint8Array` unchanged). Its TypeScript types require a Node
-  // `Buffer`; we cast because the runtime is Uint8Array-compatible and we want to
-  // stay isomorphic (no Node `Buffer` in the browser/Deno).
-  const result = await mammoth.extractRawText({ buffer: bytes as unknown as Buffer });
+  // mammoth's browser `openZip` honours ONLY an `arrayBuffer` key — passing
+  // `{ buffer }` (the Node-build option) makes it find no recognised key and
+  // throw "Could not find file in options" (docx bug 2026-08-12: xlsx worked,
+  // docx didn't, because SheetJS.read takes a Uint8Array directly). JSZip accepts
+  // the ArrayBuffer unchanged. Slice the view's range first: `bytes` may be a
+  // subarray of a larger transferred buffer, so `.buffer` alone could carry
+  // trailing bytes. (The cast is honest — transferred buffers are ArrayBuffers.)
+  const arrayBuffer = (
+    bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+      ? bytes.buffer
+      : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+  ) as ArrayBuffer;
+  const result = await mammoth.extractRawText({ arrayBuffer });
   return result.value ?? "";
 }
 
