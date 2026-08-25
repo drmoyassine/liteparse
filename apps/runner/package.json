@@ -1,0 +1,35 @@
+{
+  "name": "@liteparse/runner",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Self-hosted parse runner — Hono HTTP service exposing liteparse with browser-parity OCR (sharp raster + onnxruntime-node RapidOCR + VLM fallback).",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "dev": "tsup --watch & node --watch dist/index.js",
+    "test": "vitest run",
+    "fetch-models": "node scripts/fetch-rapidocr-models.mjs",
+    "make-fixture": "node scripts/make-ocr-fixture.mjs"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.0",
+    "@napi-rs/canvas": "^0.1.80",
+    "canvas": "^3.1.0",
+    "dommatrix": "^1.0.3",
+    "hono": "^4.7.0",
+    "liteparse": "file:../..",
+    "onnxruntime-node": "^1.22.0",
+    "pdfjs-dist": "^4.8.0",
+    "sharp": "^0.34.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
