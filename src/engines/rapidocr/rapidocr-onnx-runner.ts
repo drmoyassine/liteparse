@@ -16,12 +16,43 @@
  * - RapidOCR (Python reference): https://github.com/RapidAI/RapidOCR
  */
 
-// Import the WASM-ONLY (non-jsep) build. The default `onnxruntime-web` export resolves to
-// the jsep-capable bundle, which in the browser loads `ort-wasm-simd-threaded.jsep.wasm`
-// (built for WebGPU). That jsep build run as pure-CPU WASM computes NaN. The `./wasm`
-// subpath gives the plain SIMD WASM build — verified finite for this model in isolation
-// (onnxruntime-web/wasm + native EP both produce 0 NaN). We do CPU-only OCR, no WebGPU.
-import * as ort from "onnxruntime-web/wasm";
+// Load the WASM-ONLY (non-jsep) build LAZILY. The default `onnxruntime-web`
+// export resolves to the jsep-capable bundle, which in the browser loads
+// `ort-wasm-simd-threaded.jsep.wasm` (built for WebGPU). That jsep build run as
+// pure-CPU WASM computes NaN. The `./wasm` subpath gives the plain SIMD WASM
+// build — verified finite for this model in isolation (onnxruntime-web/wasm +
+// native EP both produce 0 NaN). We do CPU-only OCR, no WebGPU.
+//
+// The import is dynamic, not static: onnxruntime-web is a peerDependency, and
+// the main liteparse index re-exports this module — a static import made
+// `import "liteparse"` crash at module-link time (ERR_MODULE_NOT_FOUND) for any
+// consumer that installs without the peer (Node/Deno runtimes; first seen in
+// the apps/runner Docker image). pdfjs-dist (pdf.ts) and onnxruntime-node
+// (ocr/rapidocr-server.ts) are dynamic for the same reason. ort is loaded once
+// on the first init(); nothing at module scope touches it.
+type OrtWasm = typeof import("onnxruntime-web/wasm");
+let ortPromise: Promise<OrtWasm> | undefined;
+async function loadOrt(): Promise<OrtWasm> {
+  ortPromise ??= import("onnxruntime-web/wasm").then((mod) => {
+    // Load probe (moved from module scope along with the lazy import): confirms
+    // the ort import succeeded and env.wasm is present. With the dynamic import
+    // a load failure no longer crashes module eval — it surfaces at the first
+    // init() call, where the engine's error handling reports it. ALWAYS LOGGED
+    // (not dbg-gated) so production failures stay visible.
+    const g = globalThis as typeof globalThis & {
+      crossOriginIsolated?: boolean;
+      navigator?: { hardwareConcurrency?: number };
+    };
+    console.log(
+      "[rapidocr-onnx-runner] ort module loaded; env.wasm present:",
+      !!mod.env?.wasm,
+      "| crossOriginIsolated:", g.crossOriginIsolated ?? false,
+      "| numThreads target:", g.crossOriginIsolated ? Math.max(1, (g.navigator?.hardwareConcurrency ?? 2) - 1) : 1,
+    );
+    return mod;
+  });
+  return ortPromise;
+}
 // Type-only import from the REAL source package. onnxruntime-web re-exports InferenceSession/
 // Tensor via an ambient `declare module 'onnxruntime-web/wasm' { export * }` chain, which (under
 // tsup's DTS worker) exposes only the `const` value binding, not the interface — so namespace or
@@ -70,28 +101,8 @@ function dbg(...args: unknown[]): void {
   if (DEBUG) console.log(...args);
 }
 
-// Module-load probe: confirms the `onnxruntime-web/wasm` import succeeded and
-// ort.env.wasm is present. If this NEVER logs, the import threw at module eval —
-// which crashes the whole worker on startup and surfaces client-side as a silent
-// 60s parse timeout (the worker never installs its message handler). This is the
-// single most important diagnostic line when diagnosing a "timeout, no runner logs"
-// symptom. ALWAYS LOGGED (not dbg-gated) so production failures are visible.
-//
-// Node-import-safe: the main liteparse index re-exports this module, and the
-// server-side parse runner (apps/runner) imports that index on Node, where
-// `self`/`navigator` don't exist — an unguarded reference would crash at import
-// time. `globalThis` carries crossOriginIsolated in workers too, so the probe
-// stays identical in the browser.
-const G = globalThis as typeof globalThis & {
-  crossOriginIsolated?: boolean;
-  navigator?: { hardwareConcurrency?: number };
-};
-console.log(
-  "[rapidocr-onnx-runner] module loaded; ort.env.wasm present:",
-  !!ort.env?.wasm,
-  "| crossOriginIsolated:", G.crossOriginIsolated ?? false,
-  "| numThreads target:", G.crossOriginIsolated ? Math.max(1, (G.navigator?.hardwareConcurrency ?? 2) - 1) : 1,
-);
+// (The module-load probe that used to live here moved into loadOrt() above,
+// together with the lazy import — nothing at module scope may touch ort.)
 
 // PP-OCR model IDs (must match toModelUrl mapping in model-origin-hf.ts)
 const DET_MODEL_ID = "pp-ocrv4-det-latin";
@@ -119,6 +130,10 @@ const OCR_FORCE_NUM_THREADS = 0;
 export class RapidOcrRunner {
   private detSession: InferenceSession | null = null;
   private recSession: InferenceSession | null = null;
+  /** The lazily-loaded ort module (loadOrt), set by doInit before any session
+   *  create. Methods that use it run only after init() resolved — hence the
+   *  non-null assertions matching the existing `this.detSession!` idiom. */
+  private ort: OrtWasm | null = null;
   private dictChars: string[] | null = null;
   private dbParams: DBParams;
   /** Injected model origin (S3/HF fetch seam). Must be supplied by the consumer via
@@ -147,28 +162,10 @@ export class RapidOcrRunner {
   }) {
     this.dbParams = { ...DEFAULT_DB_PARAMS, ...opts?.dbParams };
     this.modelOrigin = opts?.modelOrigin ?? null;
-
-    // onnxruntime-web loads its WASM glue (ort-wasm-*.mjs/.wasm) via a dynamic
-    // import() of `wasmPaths + filename`. Vite only intercepts/transforms
-    // *statically-analyzable* import specifiers — a path-relative value like
-    // "/ort/" gets inlined and resolved into /public, which Vite refuses to
-    // import as a module ("This file is in /public ... should not be imported").
-    // Using a full origin URL (runtime value, not statically resolvable) makes
-    // Vite leave the dynamic import alone, and the browser fetches the files
-    // directly from our own /ort/ (self-hosted — no CDN, no third party).
-    // Files copied to /ort/ by scripts/copy-ort-wasm.mjs (public/ort in dev, dist/ort in build).
-    ort.env.wasm.wasmPaths = self.location.origin + "/" + "ort/";
-    // Multi-threaded WASM needs cross-origin isolation (SharedArrayBuffer/Atomics).
-    // Requesting >1 thread WITHOUT it still loads `ort-wasm-simd-threaded` but its
-    // kernels compute NaN (the "falling back to single-threading" log does NOT swap
-    // the WASM file). Only opt into threads when actually cross-origin-isolated;
-    // otherwise force 1 thread so ort uses the correct single-threaded WASM.
-    ort.env.wasm.numThreads =
-      OCR_FORCE_NUM_THREADS > 0
-        ? OCR_FORCE_NUM_THREADS
-        : self.crossOriginIsolated
-          ? Math.max(1, navigator.hardwareConcurrency - 1)
-          : 1;
+    // (ort env configuration moved to doInit — see the env block there. It must
+    // be set before the FIRST InferenceSession.create, which ort reads exactly
+    // once at initializeWebAssembly; construction-time vs init-time setup is
+    // therefore equivalent, and init-time is when the ort module is loaded.)
   }
 
   /**
@@ -191,6 +188,32 @@ export class RapidOcrRunner {
 
   private async doInit(): Promise<void> {
     console.log("[RapidOcrRunner] init: START"); // ALWAYS LOGGED (not dbg-gated) for production diagnostics
+
+    // Load ort first (lazy — see loadOrt) and configure its env BEFORE any
+    // session create. ort reads numThreads/wasmPaths once, at
+    // initializeWebAssembly() inside the first InferenceSession.create.
+    const ort = (this.ort = await loadOrt());
+    // onnxruntime-web loads its WASM glue (ort-wasm-*.mjs/.wasm) via a dynamic
+    // import() of `wasmPaths + filename`. Vite only intercepts/transforms
+    // *statically-analyzable* import specifiers — a path-relative value like
+    // "/ort/" gets inlined and resolved into /public, which Vite refuses to
+    // import as a module ("This file is in /public ... should not be imported").
+    // Using a full origin URL (runtime value, not statically resolvable) makes
+    // Vite leave the dynamic import alone, and the browser fetches the files
+    // directly from our own /ort/ (self-hosted — no CDN, no third party).
+    // Files copied to /ort/ by scripts/copy-ort-wasm.mjs (public/ort in dev, dist/ort in build).
+    ort.env.wasm.wasmPaths = self.location.origin + "/" + "ort/";
+    // Multi-threaded WASM needs cross-origin isolation (SharedArrayBuffer/Atomics).
+    // Requesting >1 thread WITHOUT it still loads `ort-wasm-simd-threaded` but its
+    // kernels compute NaN (the "falling back to single-threading" log does NOT swap
+    // the WASM file). Only opt into threads when actually cross-origin-isolated;
+    // otherwise force 1 thread so ort uses the correct single-threaded WASM.
+    ort.env.wasm.numThreads =
+      OCR_FORCE_NUM_THREADS > 0
+        ? OCR_FORCE_NUM_THREADS
+        : self.crossOriginIsolated
+          ? Math.max(1, navigator.hardwareConcurrency - 1)
+          : 1;
 
     // Model origin is INJECTED (createRapidOcrRunner({ modelOrigin })), not read from
     // the worker-shell's global config. See the import-block note: importing the shell
@@ -393,7 +416,7 @@ export class RapidOcrRunner {
     const data = this.prepareRecRow(cropped, recW);
     cropped.close();
 
-    const input = new ort.Tensor("float32", data, [1, 3, REC_HEIGHT, recW]);
+    const input = new this.ort!.Tensor("float32", data, [1, 3, REC_HEIGHT, recW]);
     const recInputName = this.recSession!.inputNames[0]!;
     const outputs = await this.recSession!.run({ [recInputName]: input });
     const output = outputs[this.recSession!.outputNames[0]!]!; // shape: [1, seq_len, num_chars]
@@ -571,7 +594,7 @@ export class RapidOcrRunner {
       }
     }
 
-    const input = new ort.Tensor("float32", data, [1, 3, resizedH, resizedW]);
+    const input = new this.ort!.Tensor("float32", data, [1, 3, resizedH, resizedW]);
 
     return { input, ratioW, ratioH };
   }
