@@ -59,11 +59,14 @@ WORKDIR /repo
 # Root first for a deterministic install layer. The committed package-lock.json
 # carries a stray `vite_react_shadcn_ts` link (a known local-tooling accident),
 # so drop it and resolve fresh — same as studygram's Dockerfile Stage 0.
+# scripts/ must precede npm install: the postinstall (copy-ort-wasm →
+# copy-pdfjs-worker) runs DURING install and needs those files — locally they
+# always sit next to package.json, a fresh checkout does not have them yet.
 COPY package.json ./
+COPY scripts ./scripts
 RUN rm -f package-lock.json && npm install --no-audit --no-fund
 COPY tsup.config.ts tsconfig.json ./
 COPY src ./src
-COPY scripts ./scripts
 RUN npm run build && npm pack --pack-destination /tmp
 
 WORKDIR /repo/apps/runner
