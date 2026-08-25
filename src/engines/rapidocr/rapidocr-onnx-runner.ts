@@ -76,11 +76,21 @@ function dbg(...args: unknown[]): void {
 // 60s parse timeout (the worker never installs its message handler). This is the
 // single most important diagnostic line when diagnosing a "timeout, no runner logs"
 // symptom. ALWAYS LOGGED (not dbg-gated) so production failures are visible.
+//
+// Node-import-safe: the main liteparse index re-exports this module, and the
+// server-side parse runner (apps/runner) imports that index on Node, where
+// `self`/`navigator` don't exist — an unguarded reference would crash at import
+// time. `globalThis` carries crossOriginIsolated in workers too, so the probe
+// stays identical in the browser.
+const G = globalThis as typeof globalThis & {
+  crossOriginIsolated?: boolean;
+  navigator?: { hardwareConcurrency?: number };
+};
 console.log(
   "[rapidocr-onnx-runner] module loaded; ort.env.wasm present:",
   !!ort.env?.wasm,
-  "| crossOriginIsolated:", self.crossOriginIsolated,
-  "| numThreads target:", self.crossOriginIsolated ? Math.max(1, navigator.hardwareConcurrency - 1) : 1,
+  "| crossOriginIsolated:", G.crossOriginIsolated ?? false,
+  "| numThreads target:", G.crossOriginIsolated ? Math.max(1, (G.navigator?.hardwareConcurrency ?? 2) - 1) : 1,
 );
 
 // PP-OCR model IDs (must match toModelUrl mapping in model-origin-hf.ts)
