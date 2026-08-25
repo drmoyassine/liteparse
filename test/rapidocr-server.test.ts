@@ -73,7 +73,7 @@ async function freshModule(
 /** Temp dir carrying fake v4 det/rec/dict files. */
 function fakeModelDir(extra?: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), "rapidocr-server-"));
-  writeFileSync(join(dir, "ch_PP-OCRv4_det.onnx"), "fake-det");
+  writeFileSync(join(dir, "ch_PP-OCRv4_det_infer.onnx"), "fake-det");
   writeFileSync(join(dir, "en_PP-OCRv4_rec_infer.onnx"), "fake-rec");
   // CRLF + blank lines: loadDict must trim and drop empties without crashing.
   writeFileSync(join(dir, "ppocr-en-dict.txt"), "a\nb\r\n\n  c  \n\r\n");
@@ -130,7 +130,7 @@ describe("createRapidOcrServerEngine — model loading", () => {
   it("reports which model file is missing from an otherwise-valid directory", async () => {
     const dir = mkdtempSync(join(tmpdir(), "rapidocr-server-partial-"));
     tempDirs.push(dir);
-    writeFileSync(join(dir, "ch_PP-OCRv4_det.onnx"), "fake-det"); // rec + dict absent
+    writeFileSync(join(dir, "ch_PP-OCRv4_det_infer.onnx"), "fake-det"); // rec + dict absent
     process.env.RAPIDOCR_MODEL_PATH = dir;
     const mod = await freshModule();
     await expect(mod.createRapidOcrServerEngine({ debug: false })).rejects.toThrow(

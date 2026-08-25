@@ -94,7 +94,7 @@ let singletonPromise: Promise<ServerModel> | null = null;
 export interface RapidOcrServerOptions {
   /** Explicit path to RapidOCR ONNX model directory (overrides auto-detection) */
   modelPath?: string;
-  /** Detection model filename (default: "ch_PP-OCRv4_det.onnx" — PP-OCRv4, Latin-capable) */
+  /** Detection model filename (default: "ch_PP-OCRv4_det_infer.onnx" — PP-OCRv4 mobile det, Latin-capable) */
   detModel?: string;
   /** Recognition model filename (default: "en_PP-OCRv4_rec_infer.onnx" — PP-OCRv4 English) */
   recModel?: string;
@@ -433,11 +433,11 @@ async function loadServerModel(opts: RapidOcrServerOptions): Promise<ServerModel
   if (!modelPath) {
     throw new Error(
       "RapidOCR models not found. Set RAPIDOCR_MODEL_PATH env var or place models in ./models/rapidocr " +
-        "(expected: ch_PP-OCRv4_det.onnx, en_PP-OCRv4_rec_infer.onnx, ppocr-en-dict.txt)",
+        "(expected: ch_PP-OCRv4_det_infer.onnx, en_PP-OCRv4_rec_infer.onnx, ppocr-en-dict.txt)",
     );
   }
 
-  const detPath = resolve(modelPath, opts.detModel ?? "ch_PP-OCRv4_det.onnx");
+  const detPath = resolve(modelPath, opts.detModel ?? "ch_PP-OCRv4_det_infer.onnx");
   const recPath = resolve(modelPath, opts.recModel ?? "en_PP-OCRv4_rec_infer.onnx");
   const dictPath = resolve(modelPath, opts.dictFile ?? "ppocr-en-dict.txt");
 
