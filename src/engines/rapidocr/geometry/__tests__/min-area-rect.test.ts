@@ -9,6 +9,7 @@
  *   3. Degenerate single point: width=0, height=0.
  */
 
+import { describe, expect, test } from "vitest";
 import { minAreaRect, getMiniBoxes } from "../min-area-rect";
 
 describe("minAreaRect", () => {
@@ -81,14 +82,14 @@ describe("getMiniBoxes", () => {
     // Corner ORDER is the load-bearing part: [TL, TR, BR, BL] in image coords
     // (y-down): TL=(0,0), TR=(10,0), BR=(10,10), BL=(0,10).
     expect(box).toHaveLength(4);
-    expect(box[0][0]).toBeCloseTo(0, 9);
-    expect(box[0][1]).toBeCloseTo(0, 9);
-    expect(box[1][0]).toBeCloseTo(10, 9);
-    expect(box[1][1]).toBeCloseTo(0, 9);
-    expect(box[2][0]).toBeCloseTo(10, 9);
-    expect(box[2][1]).toBeCloseTo(10, 9);
-    expect(box[3][0]).toBeCloseTo(0, 9);
-    expect(box[3][1]).toBeCloseTo(10, 9);
+    expect(box[0]![0]).toBeCloseTo(0, 9);
+    expect(box[0]![1]).toBeCloseTo(0, 9);
+    expect(box[1]![0]).toBeCloseTo(10, 9);
+    expect(box[1]![1]).toBeCloseTo(0, 9);
+    expect(box[2]![0]).toBeCloseTo(10, 9);
+    expect(box[2]![1]).toBeCloseTo(10, 9);
+    expect(box[3]![0]).toBeCloseTo(0, 9);
+    expect(box[3]![1]).toBeCloseTo(10, 9);
 
     // Explicit array form for clarity.
     expect(box).toEqual([

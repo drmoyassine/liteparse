@@ -1,3 +1,4 @@
+import { describe, expect, it } from "vitest";
 import { unclipBox } from "../polygon-offset";
 
 /**
@@ -48,8 +49,8 @@ describe("unclipBox (PaddleOCR unclip, rectangle miter offset)", () => {
     ];
     const xs = out.map((p) => p[0]).sort((a, b) => a - b);
     const ys = out.map((p) => p[1]).sort((a, b) => a - b);
-    const width = xs[xs.length - 1] - xs[0];
-    const height = ys[ys.length - 1] - ys[0];
+    const width = xs[xs.length - 1]! - xs[0]!;
+    const height = ys[ys.length - 1]! - ys[0]!;
     expect(width).toBeCloseTo(3, 6);
     expect(height).toBeCloseTo(2, 6);
     for (const e of expected) {
@@ -72,8 +73,8 @@ describe("unclipBox (PaddleOCR unclip, rectangle miter offset)", () => {
     const out = unclipBox(box, 1.0);
     const xs = out.map((p) => p[0]).sort((a, b) => a - b);
     const ys = out.map((p) => p[1]).sort((a, b) => a - b);
-    const width = xs[xs.length - 1] - xs[0];
-    const height = ys[ys.length - 1] - ys[0];
+    const width = xs[xs.length - 1]! - xs[0]!;
+    const height = ys[ys.length - 1]! - ys[0]!;
     expect(width).toBeCloseTo(4.2, 6);
     expect(height).toBeCloseTo(3.2, 6);
   });
@@ -87,14 +88,14 @@ describe("unclipBox (PaddleOCR unclip, rectangle miter offset)", () => {
     ];
     const out = unclipBox(box, 2.0);
     // box[0]=(0,0) -> (-0.5,-0.5); box[1]=(1,0)->(1.5,-0.5); box[2]->(1.5,1.5); box[3]->(-0.5,1.5)
-    expect(out[0][0]).toBeCloseTo(-0.5, 6);
-    expect(out[0][1]).toBeCloseTo(-0.5, 6);
-    expect(out[1][0]).toBeCloseTo(1.5, 6);
-    expect(out[1][1]).toBeCloseTo(-0.5, 6);
-    expect(out[2][0]).toBeCloseTo(1.5, 6);
-    expect(out[2][1]).toBeCloseTo(1.5, 6);
-    expect(out[3][0]).toBeCloseTo(-0.5, 6);
-    expect(out[3][1]).toBeCloseTo(1.5, 6);
+    expect(out[0]![0]).toBeCloseTo(-0.5, 6);
+    expect(out[0]![1]).toBeCloseTo(-0.5, 6);
+    expect(out[1]![0]).toBeCloseTo(1.5, 6);
+    expect(out[1]![1]).toBeCloseTo(-0.5, 6);
+    expect(out[2]![0]).toBeCloseTo(1.5, 6);
+    expect(out[2]![1]).toBeCloseTo(1.5, 6);
+    expect(out[3]![0]).toBeCloseTo(-0.5, 6);
+    expect(out[3]![1]).toBeCloseTo(1.5, 6);
   });
 
   it("handles a degenerate zero-perimeter box by copying it through", () => {
