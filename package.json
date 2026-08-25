@@ -80,6 +80,7 @@
     "postinstall": "node scripts/copy-ort-wasm.mjs && node scripts/copy-pdfjs-worker.mjs"
   },
   "dependencies": {
+    "dommatrix": "^1.0.3",
     "mammoth": "^1.12.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },

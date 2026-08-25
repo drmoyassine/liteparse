@@ -28,7 +28,7 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   clean: true,
-  external: ["pdfjs-dist", "sharp", "@napi-rs/canvas", "onnxruntime-web", "onnxruntime-node"],
+  external: ["pdfjs-dist", "sharp", "@napi-rs/canvas", "onnxruntime-web", "onnxruntime-node", "dommatrix"],
   // Keep the ESM dynamic-import graph intact (adapters load on demand).
   splitting: false,
 });

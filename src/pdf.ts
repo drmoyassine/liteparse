@@ -25,8 +25,34 @@ async function loadPdfjs(): Promise<PdfLibrary> {
   // bundle and out of runtimes that don't have it installed. We treat the module
   // loosely (`any`) because the real pdfjs types are stricter than our structural
   // PdfLibrary, but the runtime shapes are fully compatible.
+  // Non-browser runtimes (Node / Deno edge) MUST use the legacy build: the modern
+  // build evaluates browser globals (DOMMatrix, …) at module scope and throws
+  // "DOMMatrix is not defined" before any page is read (seen live on Supabase edge,
+  // 2026-08-25). Belt-and-braces, install a pure-JS DOMMatrix polyfill first when
+  // the global is missing — some pdfjs versions reference it even on the
+  // text-extraction path.
+  if (!isBrowser()) {
+    const g = globalThis as { DOMMatrix?: unknown };
+    if (typeof g.DOMMatrix === "undefined") {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const m: any = await import(/* @vite-ignore */ "dommatrix");
+        const Ctor = m?.DOMMatrix ?? m?.default?.DOMMatrix ?? m?.default ?? m;
+        if (typeof Ctor === "function") g.DOMMatrix = Ctor as new () => unknown;
+      } catch {
+        // The legacy build guards DOM APIs itself; proceed without the polyfill.
+      }
+    }
+  }
+  // Literal specifiers in each branch (NOT a computed ternary) so bundlers
+  // statically see and include both modules.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mod: any = await import(/* @vite-ignore */ "pdfjs-dist");
+  let mod: any;
+  if (isBrowser()) {
+    mod = await import(/* @vite-ignore */ "pdfjs-dist");
+  } else {
+    mod = await import(/* @vite-ignore */ "pdfjs-dist/legacy/build/pdf.mjs");
+  }
   // Modern v4 exposes getDocument on the namespace; some bundlers wrap it in .default.
   const candidate = mod?.getDocument ? mod : mod?.default ?? mod;
   const version: string | undefined = candidate?.version || mod?.version;
