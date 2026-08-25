@@ -9,7 +9,7 @@ import type { ModelDescriptor, ModelOrigin } from "../../worker/model-origin.js"
  *
  * For PP-OCRv4 Latin models, we fetch ONNX files from HuggingFace repos with
  * permissive CORS (HF serves access-control-allow-origin: * — works for browser fetch):
- * - Det: Heliosoph/paddleocr-v4-det-onnx → ch_PP-OCRv4_det.onnx (Chinese det, handles Latin)
+ * - Det: breezedeus/cnstd-ppocr-ch_PP-OCRv4_det → ch_PP-OCRv4_det_infer.onnx (Chinese det, handles Latin)
  * - Rec: breezedeus/cnocr-ppocr-en_PP-OCRv4 → en_PP-OCRv4_rec_infer.onnx (English rec)
  * - Dict: the canonical PaddleOCR English charset (94 ASCII chars), served from our own
  *   origin at /models/ppocr-en-dict.txt — see the dict branch in toModelUrl.
@@ -21,14 +21,16 @@ import type { ModelDescriptor, ModelOrigin } from "../../worker/model-origin.js"
  * Map model.id → its source URL. The id comes from the router's ModelDescriptor.
  *
  * PP-OCRv4 detection + English recognition ONNX files (HuggingFace /resolve/, permissive CORS):
- * - Detection: Heliosoph/paddleocr-v4-det-onnx → ch_PP-OCRv4_det.onnx
+ * - Detection: breezedeus/cnstd-ppocr-ch_PP-OCRv4_det → ch_PP-OCRv4_det_infer.onnx
+ *   (the original Heliososoph mirror went 401 upstream — verified 2026-08-25; cached
+ *   IndexedDB copies kept existing browsers working, masking the rot for fresh ones)
  * - Recognition: breezedeus/cnocr-ppocr-en_PP-OCRv4 → en_PP-OCRv4_rec_infer.onnx
  * - Character dict: canonical PaddleOCR English charset → /models/ppocr-en-dict.txt (own origin)
  */
 function toModelUrl(descriptor: ModelDescriptor): string {
   // PP-OCRv4 detection
   if (descriptor.id.startsWith("pp-ocrv4-det-latin")) {
-    return "https://huggingface.co/Heliosoph/paddleocr-v4-det-onnx/resolve/main/ch_PP-OCRv4_det.onnx";
+    return "https://huggingface.co/breezedeus/cnstd-ppocr-ch_PP-OCRv4_det/resolve/main/ch_PP-OCRv4_det_infer.onnx";
   }
   // PP-OCRv4 English recognition
   if (descriptor.id.startsWith("pp-ocrv4-rec-latin")) {

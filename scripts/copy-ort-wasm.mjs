@@ -9,7 +9,7 @@
  * Run automatically by `npm postinstall` after `npm install`.
  */
 
-import { copyFileSync, mkdirSync, readdirSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
@@ -19,6 +19,14 @@ const __dirname = dirname(__filename);
 const ROOT = join(__dirname, "..");
 const ORT_SRC = join(ROOT, "node_modules", "onnxruntime-web", "dist");
 const ORT_DEST = join(ROOT, "dist", "ort");
+
+// Server-side consumers (e.g. apps/runner installing this package from a
+// tarball) have no onnxruntime-web — the browser WASM artifacts don't apply
+// there. Skip cleanly instead of crashing their `npm install` (postinstall).
+if (!existsSync(ORT_SRC)) {
+  console.log("[copy-ort-wasm] onnxruntime-web not installed — skipping (non-browser consumer)");
+  process.exit(0);
+}
 
 // Ensure destination exists
 mkdirSync(ORT_DEST, { recursive: true });

@@ -58,8 +58,8 @@ export function boxScoreFast(
     const y = ry + 0.5;
     const xs: number[] = [];
     for (let i = 0; i < n; i++) {
-      const a = local[i];
-      const b = local[(i + 1) % n];
+      const a = local[i]!;
+      const b = local[(i + 1) % n]!;
       const ay = a[1];
       const by = b[1];
       // Half-open upward-crossing edge rule.
@@ -71,8 +71,8 @@ export function boxScoreFast(
     if (xs.length < 2) continue;
     xs.sort((p, q) => p - q);
     for (let k = 0; k + 1 < xs.length; k += 2) {
-      let c0 = Math.ceil(xs[k]);
-      let c1 = Math.floor(xs[k + 1]);
+      let c0 = Math.ceil(xs[k]!);
+      let c1 = Math.floor(xs[k + 1]!);
       if (c0 < 0) c0 = 0;
       if (c1 > w - 1) c1 = w - 1;
       for (let col = c0; col <= c1; col++) {
@@ -88,8 +88,8 @@ export function boxScoreFast(
     const baseRow = (ymin + ry) * probW + xmin;
     const maskRow = ry * w;
     for (let rx = 0; rx < w; rx++) {
-      if (mask[maskRow + rx] > 0) {
-        sum += prob[baseRow + rx];
+      if (mask[maskRow + rx]! > 0) {
+        sum += prob[baseRow + rx]!;
         count++;
       }
     }

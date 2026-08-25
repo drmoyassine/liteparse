@@ -5,3 +5,7 @@ coverage/
 .DS_Store
 .vscode/
 .idea/
+
+# PP-OCRv4 ONNX artifacts fetched by apps/runner/scripts/fetch-rapidocr-models.mjs
+# (the dict IS committed — apps/runner/models/ppocr-en-dict.txt)
+apps/runner/models/rapidocr/

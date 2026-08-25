@@ -56,7 +56,7 @@ function convexHull(points: Pt[]): Pt[] {
   for (const p of sorted) {
     while (
       lower.length >= 2 &&
-      cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0
+      cross(lower[lower.length - 2]!, lower[lower.length - 1]!, p) <= 0
     ) {
       lower.pop();
     }
@@ -66,10 +66,10 @@ function convexHull(points: Pt[]): Pt[] {
   // Upper hull.
   const upper: Pt[] = [];
   for (let i = sorted.length - 1; i >= 0; i--) {
-    const p = sorted[i];
+    const p = sorted[i]!;
     while (
       upper.length >= 2 &&
-      cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0
+      cross(upper[upper.length - 2]!, upper[upper.length - 1]!, p) <= 0
     ) {
       upper.pop();
     }
@@ -111,7 +111,7 @@ export function minAreaRect(pts: ReadonlyArray<Pt>): MinAreaRect {
 
   // <2 unique points: fully degenerate.
   if (unique.length < 2) {
-    const c: [number, number] = unique.length === 1 ? [unique[0][0], unique[0][1]] : [0, 0];
+    const c: [number, number] = unique.length === 1 ? [unique[0]![0], unique[0]![1]] : [0, 0];
     return { corners: [c, c, c, c], width: 0, height: 0 };
   }
 
@@ -120,8 +120,8 @@ export function minAreaRect(pts: ReadonlyArray<Pt>): MinAreaRect {
   // 2-point hull: input is collinear (the hull collapsed to a segment). The
   // enclosing rectangle is a degenerate flat segment of that length.
   if (hull.length < 3) {
-    const a = hull[0];
-    const b = hull[1];
+    const a = hull[0]!;
+    const b = hull[1]!;
     const seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
     const a2: [number, number] = [a[0], a[1]];
     const b2: [number, number] = [b[0], b[1]];
@@ -142,8 +142,8 @@ export function minAreaRect(pts: ReadonlyArray<Pt>): MinAreaRect {
 
   const n = hull.length;
   for (let i = 0; i < n; i++) {
-    const a = hull[i];
-    const b = hull[(i + 1) % n];
+    const a = hull[i]!;
+    const b = hull[(i + 1) % n]!;
     const ex = b[0] - a[0];
     const ey = b[1] - a[1];
     const len = Math.hypot(ex, ey);
@@ -226,14 +226,14 @@ export function getMiniBoxes(contour: ReadonlyArray<Pt>): MiniBox {
   let i2: number;
   let i3: number;
   let i4: number;
-  if (pts[1][1] > pts[0][1]) {
+  if (pts[1]![1] > pts[0]![1]) {
     i1 = 0;
     i4 = 1;
   } else {
     i1 = 1;
     i4 = 0;
   }
-  if (pts[3][1] > pts[2][1]) {
+  if (pts[3]![1] > pts[2]![1]) {
     i2 = 2;
     i3 = 3;
   } else {
@@ -242,10 +242,10 @@ export function getMiniBoxes(contour: ReadonlyArray<Pt>): MiniBox {
   }
 
   const box: [number, number][] = [
-    [pts[i1][0], pts[i1][1]],
-    [pts[i2][0], pts[i2][1]],
-    [pts[i3][0], pts[i3][1]],
-    [pts[i4][0], pts[i4][1]],
+    [pts[i1]![0], pts[i1]![1]],
+    [pts[i2]![0], pts[i2]![1]],
+    [pts[i3]![0], pts[i3]![1]],
+    [pts[i4]![0], pts[i4]![1]],
   ];
 
   return { box, sside: Math.min(width, height) };

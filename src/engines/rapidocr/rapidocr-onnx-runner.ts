@@ -16,12 +16,43 @@
  * - RapidOCR (Python reference): https://github.com/RapidAI/RapidOCR
  */
 
-// Import the WASM-ONLY (non-jsep) build. The default `onnxruntime-web` export resolves to
-// the jsep-capable bundle, which in the browser loads `ort-wasm-simd-threaded.jsep.wasm`
-// (built for WebGPU). That jsep build run as pure-CPU WASM computes NaN. The `./wasm`
-// subpath gives the plain SIMD WASM build — verified finite for this model in isolation
-// (onnxruntime-web/wasm + native EP both produce 0 NaN). We do CPU-only OCR, no WebGPU.
-import * as ort from "onnxruntime-web/wasm";
+// Load the WASM-ONLY (non-jsep) build LAZILY. The default `onnxruntime-web`
+// export resolves to the jsep-capable bundle, which in the browser loads
+// `ort-wasm-simd-threaded.jsep.wasm` (built for WebGPU). That jsep build run as
+// pure-CPU WASM computes NaN. The `./wasm` subpath gives the plain SIMD WASM
+// build — verified finite for this model in isolation (onnxruntime-web/wasm +
+// native EP both produce 0 NaN). We do CPU-only OCR, no WebGPU.
+//
+// The import is dynamic, not static: onnxruntime-web is a peerDependency, and
+// the main liteparse index re-exports this module — a static import made
+// `import "liteparse"` crash at module-link time (ERR_MODULE_NOT_FOUND) for any
+// consumer that installs without the peer (Node/Deno runtimes; first seen in
+// the apps/runner Docker image). pdfjs-dist (pdf.ts) and onnxruntime-node
+// (ocr/rapidocr-server.ts) are dynamic for the same reason. ort is loaded once
+// on the first init(); nothing at module scope touches it.
+type OrtWasm = typeof import("onnxruntime-web/wasm");
+let ortPromise: Promise<OrtWasm> | undefined;
+async function loadOrt(): Promise<OrtWasm> {
+  ortPromise ??= import("onnxruntime-web/wasm").then((mod) => {
+    // Load probe (moved from module scope along with the lazy import): confirms
+    // the ort import succeeded and env.wasm is present. With the dynamic import
+    // a load failure no longer crashes module eval — it surfaces at the first
+    // init() call, where the engine's error handling reports it. ALWAYS LOGGED
+    // (not dbg-gated) so production failures stay visible.
+    const g = globalThis as typeof globalThis & {
+      crossOriginIsolated?: boolean;
+      navigator?: { hardwareConcurrency?: number };
+    };
+    console.log(
+      "[rapidocr-onnx-runner] ort module loaded; env.wasm present:",
+      !!mod.env?.wasm,
+      "| crossOriginIsolated:", g.crossOriginIsolated ?? false,
+      "| numThreads target:", g.crossOriginIsolated ? Math.max(1, (g.navigator?.hardwareConcurrency ?? 2) - 1) : 1,
+    );
+    return mod;
+  });
+  return ortPromise;
+}
 // Type-only import from the REAL source package. onnxruntime-web re-exports InferenceSession/
 // Tensor via an ambient `declare module 'onnxruntime-web/wasm' { export * }` chain, which (under
 // tsup's DTS worker) exposes only the `const` value binding, not the interface — so namespace or
@@ -44,6 +75,19 @@ import type { OcrRunner } from "../../ocr/rapidocr.js";
 // The model origin is INJECTED (createRapidOcrRunner({ modelOrigin })) instead of
 // read from global worker config, so this module has no dependency on the shell.
 import { dbPostProcess, DEFAULT_DB_PARAMS, setDbPostProcessDebug, type DBParams } from "./db-postprocess.js";
+// Runtime-agnostic decode/geometry/quality modules shared with the server engine
+// (ocr/rapidocr-server.ts) — single source of the CTC layout knowledge, the
+// reading-order sort, and the OCR quality gates (calibrated in ocr-lab).
+import { createCtcDecoder } from "./shared/ctc-decode.js";
+import { readingOrderSort } from "./shared/reading-order.js";
+import {
+  lengthWeightedConfidence,
+  minBoxSide,
+  OCR_CONFIDENCE_FLOOR,
+  PER_BOX_CONFIDENCE_FLOOR,
+  MIN_BOX_SIDE_PX,
+  type TextBox,
+} from "./shared/quality.js";
 
 // ── Telemetry gate ─────────────────────────────────────────────────────────────
 // The runner emits a lot of OCR-quality/latency telemetry (init timing, det/rec stats, box
@@ -57,18 +101,8 @@ function dbg(...args: unknown[]): void {
   if (DEBUG) console.log(...args);
 }
 
-// Module-load probe: confirms the `onnxruntime-web/wasm` import succeeded and
-// ort.env.wasm is present. If this NEVER logs, the import threw at module eval —
-// which crashes the whole worker on startup and surfaces client-side as a silent
-// 60s parse timeout (the worker never installs its message handler). This is the
-// single most important diagnostic line when diagnosing a "timeout, no runner logs"
-// symptom. ALWAYS LOGGED (not dbg-gated) so production failures are visible.
-console.log(
-  "[rapidocr-onnx-runner] module loaded; ort.env.wasm present:",
-  !!ort.env?.wasm,
-  "| crossOriginIsolated:", self.crossOriginIsolated,
-  "| numThreads target:", self.crossOriginIsolated ? Math.max(1, navigator.hardwareConcurrency - 1) : 1,
-);
+// (The module-load probe that used to live here moved into loadOrt() above,
+// together with the lazy import — nothing at module scope may touch ort.)
 
 // PP-OCR model IDs (must match toModelUrl mapping in model-origin-hf.ts)
 const DET_MODEL_ID = "pp-ocrv4-det-latin";
@@ -91,99 +125,15 @@ const DICT_VERSION = "1.2.0";
 const OCR_FORCE_NUM_THREADS = 0;
 
 /**
- * OCR quality gate ("garbage indicator" → VLM fallback).
- *
- * The runner computes a document-level recognition confidence = length-weighted mean of
- * per-box CTC argmax probability (the rec export is already softmax'd, so the argmax value at
- * each emitted timestep IS that char's probability — averaged, NOT re-softmaxed). PP-OCRv4 on
- * clean printed text sits ~0.93–0.98; stylized/colored/low-contrast
- * text (the flyer that produced "The Spansh ls ae d mdit in distce") drops to ~0.5–0.7,
- * dragging the doc mean down.
- *
- * If the doc mean drops below this floor, the OCR text is DISCARDED (returned as "") so
- * the liteparse cascade under-yields and clientExtract's EXISTING edge-fallback path
- * re-reads the document via the parse-document edge function (VLM) — which handles this
- * kind of content far better than a CTC rec model. This is the confidence-gate the user
- * asked for: risk (1 − confidence) must stay ≤ 10%, else escalate to VLM.
- *
- * Idiomatic: liteparse's own Granite engine uses the identical pattern (`confidence < 0.2
- * → {text:""}` → cascade descends). 0.90 is the initial spec; the per-box/doc confidence
- * logs let you calibrate — if clean docs start escalating to VLM, lower this; if garbage
- * survives, raise it or switch to a per-box rule.
- */
-const OCR_CONFIDENCE_FLOOR = 0.90;
-
-/**
- * Per-box recognition confidence floor. A box whose CTC confidence falls below this is
- * treated as GARBAGE and dropped from BOTH the output text and the doc-confidence mean —
- * BEFORE the doc-level {@link OCR_CONFIDENCE_FLOOR} gate runs.
- *
- * Why per-box, not just doc-level: a length-weighted doc mean CANNOT distinguish "10% of the
- * chars are an UNREADABLE SCRIPT" (Arabic via a Latin model → garbage at conf 0.2–0.7) from
- * "10% of the chars are RISKILY recognized". On a bilingual travel-insurance form the
- * unreadable Arabic dragged the doc mean to 0.891 — just under 0.90 — so the doc-level gate
- * discarded ~2450 chars of near-perfect English alongside the Arabic (52s of OCR → zero text).
- * Filtering garbage boxes first means the doc mean reflects ONLY the text the model actually
- * read, so the gate escalates ONLY when the RECOGNIZED text is itself poor (a systemic
- * medium-confidence doc, e.g. a stylized flyer). For such a doc the survivors still average
- * < OCR_CONFIDENCE_FLOOR → still escalates, so the original guarantee is preserved.
- *
- * 0.60 = "≥40%-likely-wrong per char is garbage". On the sample form every real English/numeric
- * line read at ≥0.88 while the Arabic garbage sat at 0.2–0.7, so 0.60 cleanly separates them.
- * Calibrate via the per-box breakdown log (filtered-out boxes are marked ✗).
- */
-const PER_BOX_CONFIDENCE_FLOOR = 0.60;
-
-/**
- * Minimum box side (px, original-image space) worth recognizing. A box shorter than this
- * can't hold legible text — the rec model resizes crops to a fixed 48px height, so a <6px-tall
- * box is an ≥8× upscale that only ever yields garbage/empty. Dropping it pre-recognition saves
- * a full rec inference per noise box and keeps detection noise out of the output. PP-OCR's
- * reference pipeline applies the same min-size filter after DB post-processing. Conservative
- * (6px) so it never drops real text — its main value is cleaner output; any speed gain depends
- * on how many detected boxes are sub-6px noise (vs. normal-size-but-empty cells, which #1's
- * confidence filter catches post-recognition).
- */
-const MIN_BOX_SIDE_PX = 6;
-
-/**
- * Text bounding box (polygon coordinates)
- */
-interface TextBox {
-  points: number[][];  // 4 points [[x,y], ...] in image coordinates
-  text?: string;       // filled after recognition
-  score?: number;      // detection confidence
-  recConf?: number;    // recognition confidence (0–1, CTC mean softmax of emitted chars)
-}
-
-/**
- * Minimum of the bounding-rect width/height of a box's 4 polygon points, in original-image px.
- * Used by the pre-recognition geometry filter (see {@link MIN_BOX_SIDE_PX}): a box whose shortest
- * side is tiny can't hold legible text and is not worth a rec inference. Defensive against a
- * malformed (fewer-point) box — returns Infinity for an empty polygon (kept) so only real
- * sub-min boxes are dropped.
- */
-function minBoxSide(b: TextBox): number {
-  const pts = b.points;
-  if (!pts || pts.length === 0) return Infinity;
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const p of pts) {
-    const x = p[0]!;
-    const y = p[1]!;
-    if (x < minX) minX = x;
-    if (x > maxX) maxX = x;
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
-  }
-  return Math.min(maxX - minX, maxY - minY);
-}
-
-/**
  * RapidOCR runner: loads ONNX models, runs detection+recognition on ImageBitmap
  */
 export class RapidOcrRunner {
   private detSession: InferenceSession | null = null;
   private recSession: InferenceSession | null = null;
+  /** The lazily-loaded ort module (loadOrt), set by doInit before any session
+   *  create. Methods that use it run only after init() resolved — hence the
+   *  non-null assertions matching the existing `this.detSession!` idiom. */
+  private ort: OrtWasm | null = null;
   private dictChars: string[] | null = null;
   private dbParams: DBParams;
   /** Injected model origin (S3/HF fetch seam). Must be supplied by the consumer via
@@ -191,7 +141,9 @@ export class RapidOcrRunner {
    *  rather than silently no-op'ing. NOT read from global worker config — see the
    *  import-block note on why this module cannot touch ocr-worker.ts. */
   private modelOrigin: ModelOrigin | null;
-  private loggedCtcLayout = false; // one-shot: log numChars vs dict.length on first decode
+  /** Per-engine CTC decoder (owns the one-shot layout log). Built in doInit once the
+   *  dict is loaded — the decode logic itself lives in shared/ctc-decode.ts. */
+  private ctcDecoder: ReturnType<typeof createCtcDecoder> | null = null;
   /** In-flight init() — dedupes concurrent first calls so we never compile two det/rec
    *  session pairs in parallel (each pair is ~3s of WASM work + ~20MB). */
   private initPromise: Promise<void> | null = null;
@@ -210,28 +162,10 @@ export class RapidOcrRunner {
   }) {
     this.dbParams = { ...DEFAULT_DB_PARAMS, ...opts?.dbParams };
     this.modelOrigin = opts?.modelOrigin ?? null;
-
-    // onnxruntime-web loads its WASM glue (ort-wasm-*.mjs/.wasm) via a dynamic
-    // import() of `wasmPaths + filename`. Vite only intercepts/transforms
-    // *statically-analyzable* import specifiers — a path-relative value like
-    // "/ort/" gets inlined and resolved into /public, which Vite refuses to
-    // import as a module ("This file is in /public ... should not be imported").
-    // Using a full origin URL (runtime value, not statically resolvable) makes
-    // Vite leave the dynamic import alone, and the browser fetches the files
-    // directly from our own /ort/ (self-hosted — no CDN, no third party).
-    // Files copied to /ort/ by scripts/copy-ort-wasm.mjs (public/ort in dev, dist/ort in build).
-    ort.env.wasm.wasmPaths = self.location.origin + "/" + "ort/";
-    // Multi-threaded WASM needs cross-origin isolation (SharedArrayBuffer/Atomics).
-    // Requesting >1 thread WITHOUT it still loads `ort-wasm-simd-threaded` but its
-    // kernels compute NaN (the "falling back to single-threading" log does NOT swap
-    // the WASM file). Only opt into threads when actually cross-origin-isolated;
-    // otherwise force 1 thread so ort uses the correct single-threaded WASM.
-    ort.env.wasm.numThreads =
-      OCR_FORCE_NUM_THREADS > 0
-        ? OCR_FORCE_NUM_THREADS
-        : self.crossOriginIsolated
-          ? Math.max(1, navigator.hardwareConcurrency - 1)
-          : 1;
+    // (ort env configuration moved to doInit — see the env block there. It must
+    // be set before the FIRST InferenceSession.create, which ort reads exactly
+    // once at initializeWebAssembly; construction-time vs init-time setup is
+    // therefore equivalent, and init-time is when the ort module is loaded.)
   }
 
   /**
@@ -254,6 +188,32 @@ export class RapidOcrRunner {
 
   private async doInit(): Promise<void> {
     console.log("[RapidOcrRunner] init: START"); // ALWAYS LOGGED (not dbg-gated) for production diagnostics
+
+    // Load ort first (lazy — see loadOrt) and configure its env BEFORE any
+    // session create. ort reads numThreads/wasmPaths once, at
+    // initializeWebAssembly() inside the first InferenceSession.create.
+    const ort = (this.ort = await loadOrt());
+    // onnxruntime-web loads its WASM glue (ort-wasm-*.mjs/.wasm) via a dynamic
+    // import() of `wasmPaths + filename`. Vite only intercepts/transforms
+    // *statically-analyzable* import specifiers — a path-relative value like
+    // "/ort/" gets inlined and resolved into /public, which Vite refuses to
+    // import as a module ("This file is in /public ... should not be imported").
+    // Using a full origin URL (runtime value, not statically resolvable) makes
+    // Vite leave the dynamic import alone, and the browser fetches the files
+    // directly from our own /ort/ (self-hosted — no CDN, no third party).
+    // Files copied to /ort/ by scripts/copy-ort-wasm.mjs (public/ort in dev, dist/ort in build).
+    ort.env.wasm.wasmPaths = self.location.origin + "/" + "ort/";
+    // Multi-threaded WASM needs cross-origin isolation (SharedArrayBuffer/Atomics).
+    // Requesting >1 thread WITHOUT it still loads `ort-wasm-simd-threaded` but its
+    // kernels compute NaN (the "falling back to single-threading" log does NOT swap
+    // the WASM file). Only opt into threads when actually cross-origin-isolated;
+    // otherwise force 1 thread so ort uses the correct single-threaded WASM.
+    ort.env.wasm.numThreads =
+      OCR_FORCE_NUM_THREADS > 0
+        ? OCR_FORCE_NUM_THREADS
+        : self.crossOriginIsolated
+          ? Math.max(1, navigator.hardwareConcurrency - 1)
+          : 1;
 
     // Model origin is INJECTED (createRapidOcrRunner({ modelOrigin })), not read from
     // the worker-shell's global config. See the import-block note: importing the shell
@@ -360,6 +320,7 @@ export class RapidOcrRunner {
     // each run and logs the model's actual output dim on first decode to confirm the match.
     const dictText = new TextDecoder().decode(dictBytes);
     this.dictChars = dictText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    this.ctcDecoder = createCtcDecoder(this.dictChars, { debug: DEBUG });
 
     dbg(
       `[RapidOcrRunner] init: DONE. Det inputs: ${this.detSession!.inputNames}, ` +
@@ -455,12 +416,17 @@ export class RapidOcrRunner {
     const data = this.prepareRecRow(cropped, recW);
     cropped.close();
 
-    const input = new ort.Tensor("float32", data, [1, 3, REC_HEIGHT, recW]);
+    const input = new this.ort!.Tensor("float32", data, [1, 3, REC_HEIGHT, recW]);
     const recInputName = this.recSession!.inputNames[0]!;
     const outputs = await this.recSession!.run({ [recInputName]: input });
     const output = outputs[this.recSession!.outputNames[0]!]!; // shape: [1, seq_len, num_chars]
 
-    return this.ctcDecodeRow(output, 0);
+    // The rec export's output IS float32 probabilities (the shared decoder's layout probe
+    // verifies range [0,1] on the first row) — narrow the ort Tensor union into a TensorLike.
+    return this.ctcDecoder!.decodeRow(
+      { dims: output.dims, data: output.data as Float32Array },
+      0,
+    );
   }
 
   /**
@@ -544,15 +510,7 @@ export class RapidOcrRunner {
     const droppedLowConf = recBoxes.length - kept.length;
 
     // Document-level confidence: length-weighted mean over the KEPT (confident) boxes only.
-    // Weight by non-whitespace char count so a long clean line counts more than a short one.
-    let lenSum = 0;
-    let weightedConf = 0;
-    for (const b of kept) {
-      const len = (b.text || "").replace(/\s/g, "").length;
-      lenSum += len;
-      weightedConf += (b.recConf ?? 0) * len;
-    }
-    this.docConfidence = lenSum > 0 ? weightedConf / lenSum : 0;
+    this.docConfidence = lengthWeightedConfidence(kept);
 
     const recognized = recBoxes.filter((b) => b.text && b.text.trim().length > 0);
     dbg(
@@ -636,7 +594,7 @@ export class RapidOcrRunner {
       }
     }
 
-    const input = new ort.Tensor("float32", data, [1, 3, resizedH, resizedW]);
+    const input = new this.ort!.Tensor("float32", data, [1, 3, resizedH, resizedW]);
 
     return { input, ratioW, ratioH };
   }
@@ -769,127 +727,6 @@ export class RapidOcrRunner {
   }
 
   /**
-   * CTC greedy decoding of ONE row of a (possibly batched) rec output.
-   * recOutput shape [G, seq_len, num_chars]; `row` selects the batch element to decode. The
-   * single-box path passes a [1, seq_len, num_chars] tensor with row=0.
-   *
-   * Confidence = mean argmax probability across EMITTED timesteps (non-blank, non-collapsed-
-   * repeat). The rec export's final layer is already a softmax over the 97 CTC classes, so the
-   * argmax value at each timestep IS the probability the model assigned to the emitted char —
-   * average it directly. This is the standard CTC recognition confidence: how sure the model
-   * was about each character it actually produced. A box full of garbage has low argmax prob
-   * (the model is guessing); a clean box has high prob (~0.95–0.99). Aggregated length-weighted
-   * to a doc mean in recognize(), then gated against OCR_CONFIDENCE_FLOOR.
-   *
-   * PaddleOCR CTC label layout (authoritative — PaddleOCR rec_postprocess.py):
-   *   add_special_char: `dict_character = ['blank'] + dict_character` → blank PREPENDED at
-   *   index 0 (get_ignored_tokens() returns [0]). use_space_char appends ' ' to the dict
-   *   BEFORE the blank is prepended, so the final order is:
-   *     index 0 = blank, indices 1..N = dict[0..N-1], index N+1 = space.
-   * v4 shares v3's blank@0/space@last CTC layout; numChars is derived at runtime.
-   */
-  private ctcDecodeRow(recOutput: Tensor, row: number): { text: string; confidence: number } {
-    const [, seqLen, numChars] = recOutput.dims as [number, number, number];
-    // `.data` (sync) not `getData()` (async Promise) — see note in dbPostProcess() above.
-    const data = recOutput.data as Float32Array;
-    const dict = this.dictChars!;
-
-    const blankId = 0; // PaddleOCR: blank is PREPENDED at index 0 (the FIRST class)
-    // PaddleOCR ALWAYS appends space as the LAST char in the CTC charset (dict first, then
-    // space appended, then blank prepended at 0): blank@0, dict@1..N, space@N+1. So space is
-    // unambiguously the FINAL class — `numChars - 1` — regardless of the exact dict length.
-    // The earlier strict guard `numChars === dict.length + 2` was wrong for this model: it
-    // outputs 97 classes (dict 94 + blank + space + 1 trailing special token), so the guard
-    // set spaceId = -1 and EVERY space was silently dropped — "Generalconditions" instead of
-    // "General conditions". Trust the convention (space = last), not arithmetic.
-    const spaceId = numChars - 1;
-
-    // One-shot diagnostic: report the rec model's actual output-class count and the inferred
-    // layout. The trailing special class(es) between the dict and space (here: 1 extra) are
-    // dropped by labelChar (out of dict range → null). This confirmed the 97-class layout.
-    if (!this.loggedCtcLayout && row === 0) {
-      this.loggedCtcLayout = true;
-      const trailingSpecials = numChars - 1 - dict.length; // classes after the dict, excl. blank@0; last = space
-      // Probe whether this rec export emits PROBABILITIES or raw LOGITS. The breezedeus
-      // en_PP-OCRv4_rec_infer export includes softmax in the graph → output is already probabilities
-      // (range [0,1], Σclasses@t ≈ 1), confirmed offline (scripts/ocr-lab/calibrate.ts). That
-      // decides the confidence metric: if probs, the argmax value IS the per-char probability and
-      // we must NOT re-softmax (re-softmaxing a probability distribution flattens it to ~1/numChars
-      // for EVERY box → the OCR_CONFIDENCE_FLOOR gate can never discriminate clean from garbage).
-      // A future model swap that exports raw logits would surface here as range outside [0,1].
-      let rmin = Infinity;
-      let rmax = -Infinity;
-      let sum0 = 0;
-      for (let c = 0; c < numChars; c++) {
-        const v = data[c]!;
-        if (v < rmin) rmin = v;
-        if (v > rmax) rmax = v;
-        sum0 += v;
-      }
-      const isProbs = rmin >= -0.001 && rmax <= 1.001 && Math.abs(sum0 - 1) < 0.05;
-      dbg(
-        `[RapidOcrRunner] CTC layout: numChars=${numChars} dict.length=${dict.length} ` +
-        `(blank@0, dict@1..${dict.length}, ${trailingSpecials} trailing special class(es) incl. space@${numChars - 1}). ` +
-        `Rec output range [${rmin.toFixed(3)}, ${rmax.toFixed(3)}] Σ@t0=${sum0.toFixed(2)} ` +
-        `→ ${isProbs ? "PROBABILITIES (conf = mean argmax prob — correct)" : "LOGITS (conf = softmax)"}`
-      );
-    }
-
-    const labelChar = (i: number): string | null => {
-      if (i === blankId) return null;
-      if (i === spaceId) return " ";
-      // Dict chars occupy indices 1..N (the blank at index 0 shifts them by one).
-      const ci = i - 1;
-      if (ci >= 0 && ci < dict.length) return dict[ci] ?? null;
-      return null; // out of range → drop (never emit "undefined")
-    };
-
-    // Greedy CTC: emit the argmax label when it is not blank and not a collapsed repeat.
-    // Track the previous timestep's label (including blank) so a char repeated across a
-    // blank separator is emitted twice. Confidence = softmax(argmax) averaged over emitted
-    // timesteps; the softmax denominator is computed (second pass) only on emit steps.
-    //
-    // Batched layout: output is [G, seqLen, numChars] row-major, so row `row` starts at
-    // rowOffset and each timestep advances by numChars. (For a batch-of-1, row=0 → offset 0.)
-    const rowOffset = row * seqLen * numChars;
-    let text = "";
-    let last = -1;
-    let probSum = 0;
-    let emitted = 0;
-    for (let t = 0; t < seqLen; t++) {
-      const base = rowOffset + t * numChars;
-      // Pass 1: argmax (bv = the max logit at this timestep).
-      let bi = 0;
-      let bv = -Infinity;
-      for (let c = 0; c < numChars; c++) {
-        const v = data[base + c]!;
-        if (v > bv) {
-          bv = v;
-          bi = c;
-        }
-      }
-      if (bi !== blankId && bi !== last) {
-        const ch = labelChar(bi);
-        if (ch) {
-          text += ch;
-          // Confidence: bv is the argmax value. This rec export outputs PROBABILITIES (verified:
-          // range [0,1], Σclasses@t ≈ 1 — see the one-shot layout log), so bv IS the per-timestep
-          // recognition probability; average it over emitted chars. The prior softmax-of-logits
-          // metric re-softmaxed an already-softmaxed output → ~1/numChars (≈0.01) for EVERY box,
-          // clean or garbage, which made the OCR_CONFIDENCE_FLOOR gate non-discriminative (it would
-          // have escalated every document). With this metric clean printed text reads ~0.95–0.99,
-          // garbled/stylized text ~0.6–0.8 — a real garbage indicator. (Calibrated in ocr-lab.)
-          probSum += bv;
-          emitted++;
-        }
-      }
-      last = bi;
-    }
-
-    return { text, confidence: emitted > 0 ? probSum / emitted : 0 };
-  }
-
-  /**
    * Release model sessions
    */
   dispose(): void {
@@ -959,14 +796,7 @@ export function createRapidOcrRunner(opts?: {
       // the line sequence (e.g. a bullet point outscores the title and prints first). Boxes on
       // the same visual line have near-equal top edges (grouped by the 5px tolerance); distinct
       // text lines are tens of px apart, so the tolerance cleanly separates them.
-      const readingOrder = [...boxes].sort((a, b) => {
-        const topA = Math.min(...a.points.map((p) => p[1]!));
-        const topB = Math.min(...b.points.map((p) => p[1]!));
-        if (Math.abs(topA - topB) > 5) return topA - topB; // different lines → top first
-        const leftA = Math.min(...a.points.map((p) => p[0]!));
-        const leftB = Math.min(...b.points.map((p) => p[0]!));
-        return leftA - leftB; // same line → left first
-      });
+      const readingOrder = readingOrderSort(boxes);
       const text = readingOrder.map((b) => b.text || "").join("\n");
       const conf = runner.docConfidence;
       dbg(

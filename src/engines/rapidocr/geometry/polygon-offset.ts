@@ -56,7 +56,7 @@ export function unclipBox(
   let area2 = 0;
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
-    area2 += box[i][0] * box[j][1] - box[j][0] * box[i][1];
+    area2 += box[i]![0] * box[j]![1] - box[j]![0] * box[i]![1];
   }
   const area = Math.abs(area2) / 2;
 
@@ -64,7 +64,7 @@ export function unclipBox(
   let perimeter = 0;
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
-    perimeter += Math.hypot(box[j][0] - box[i][0], box[j][1] - box[i][1]);
+    perimeter += Math.hypot(box[j]![0] - box[i]![0], box[j]![1] - box[i]![1]);
   }
   if (perimeter === 0) {
     return box.map((p) => [p[0], p[1]] as [number, number]);
@@ -87,8 +87,8 @@ export function unclipBox(
   // offsetEdge[i] = { a', b' } where a' = box[i] + d*outward, b' = box[(i+1)%4] + d*outward.
   const offsetEdges: OffsetEdge[] = [];
   for (let i = 0; i < n; i++) {
-    const a = box[i];
-    const b = box[(i + 1) % n];
+    const a = box[i]!;
+    const b = box[(i + 1) % n]!;
     const ex = b[0] - a[0];
     const ey = b[1] - a[1];
     const elen = Math.hypot(ex, ey);
@@ -121,8 +121,8 @@ export function unclipBox(
   // New vertex[i] = line-line intersection of offsetEdges[(i-1+n)%n] and offsetEdges[i].
   const result: [number, number][] = [];
   for (let i = 0; i < n; i++) {
-    const prev = offsetEdges[(i - 1 + n) % n];
-    const cur = offsetEdges[i];
+    const prev = offsetEdges[(i - 1 + n) % n]!;
+    const cur = offsetEdges[i]!;
     result.push(lineIntersect(prev, cur));
   }
   return result;

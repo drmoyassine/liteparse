@@ -1,3 +1,4 @@
+import { describe, expect, it } from "vitest";
 import { boxScoreFast } from "../polygon-fill";
 
 describe("boxScoreFast", () => {
