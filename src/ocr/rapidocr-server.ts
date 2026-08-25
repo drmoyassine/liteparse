@@ -1,6 +1,6 @@
 import type { OcrContext, OcrEngine, OcrResult } from "../types.js";
-import { existsSync } from "fs";
-import { resolve } from "path";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 
 /**
  * Node OCR engine using RapidOCR models via ONNX Runtime Node.
@@ -190,7 +190,7 @@ async function loadModel(ort: any, path: string): Promise<any> {
 
 async function loadDict(path: string): Promise<string[]> {
   // Use dynamic import for fs to avoid issues in browser builds
-  const fs = await import("fs/promises");
+  const fs = await import("node:fs/promises");
   const content = await fs.readFile(path, "utf-8");
   return content.split("\n").map((line) => line.trim()).filter(Boolean);
 }
