@@ -19,20 +19,38 @@
 # Pins must match scripts/fetch-rapidocr-models.mjs (which prints them). The
 # det URL is NOT the one the browser uses — its original mirror went 401
 # upstream (2026-08); see src/engines/rapidocr/model-origin-hf.ts for history.
+# Download via node itself — debian slim ships no curl/wget.
 FROM node:22-slim AS models
 WORKDIR /models
 COPY apps/runner/models/ppocr-en-dict.txt /models/rapidocr/ppocr-en-dict.txt
 RUN <<'EOF'
 set -eux
-# Det: breezedeus/cnstd conversion of the official ch_PP-OCRv4 mobile det weights
-curl -fsSL -o /models/rapidocr/ch_PP-OCRv4_det_infer.onnx \
-  "https://huggingface.co/breezedeus/cnstd-ppocr-ch_PP-OCRv4_det/resolve/main/ch_PP-OCRv4_det_infer.onnx"
-# Rec: breezedeus/cnocr English PP-OCRv4 rec weights
-curl -fsSL -o /models/rapidocr/en_PP-OCRv4_rec_infer.onnx \
-  "https://huggingface.co/breezedeus/cnocr-ppocr-en_PP-OCRv4/resolve/main/en_PP-OCRv4_rec_infer.onnx"
-cd /models/rapidocr
-echo "d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9  ch_PP-OCRv4_det_infer.onnx" | sha256sum -c -
-echo "5ca59a096cf493d5fd5044b9ccc1bdea9229fbcf656bd76040ff80a00201ee16  en_PP-OCRv4_rec_infer.onnx" | sha256sum -c -
+node <<'NODE'
+const { createHash } = require("node:crypto");
+const { writeFileSync } = require("node:fs");
+const ARTIFACTS = [
+  // Det: breezedeus/cnstd conversion of the official ch_PP-OCRv4 mobile det weights
+  ["ch_PP-OCRv4_det_infer.onnx",
+   "d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9",
+   "https://huggingface.co/breezedeus/cnstd-ppocr-ch_PP-OCRv4_det/resolve/main/ch_PP-OCRv4_det_infer.onnx"],
+  // Rec: breezedeus/cnocr English PP-OCRv4 rec weights
+  ["en_PP-OCRv4_rec_infer.onnx",
+   "5ca59a096cf493d5fd5044b9ccc1bdea9229fbcf656bd76040ff80a00201ee16",
+   "https://huggingface.co/breezedeus/cnocr-ppocr-en_PP-OCRv4/resolve/main/en_PP-OCRv4_rec_infer.onnx"],
+];
+(async () => {
+  for (const [name, sha256, url] of ARTIFACTS) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length < 1_000_000) throw new Error(`${name}: suspiciously small (${buf.length}B)`);
+    const got = createHash("sha256").update(buf).digest("hex");
+    if (got !== sha256) throw new Error(`${name}: sha256 ${got} != ${sha256}`);
+    writeFileSync(`/models/rapidocr/${name}`, buf);
+    console.log(`verified ${name} (${(buf.length / 1048576).toFixed(1)} MB)`);
+  }
+})().catch((e) => { console.error(e); process.exit(1); });
+NODE
 EOF
 
 # ── Stage 2: build the library + the runner ───────────────────────────────────
