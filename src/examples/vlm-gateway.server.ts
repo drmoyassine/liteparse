@@ -28,6 +28,12 @@ export interface ServerVlmOptions {
    */
   keyHeader?: string;
   maxTokens?: number;
+  /**
+   * Sampling temperature. Defaults to 0 — this gateway is used for verbatim
+   * transcription, which must be deterministic (an unset temperature let the
+   * provider sample a different transcription of the same image per call).
+   */
+  temperature?: number;
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -50,6 +56,7 @@ export function createServerVlmGateway(opts: ServerVlmOptions): VlmGateway {
       const body = {
         model: opts.model,
         max_tokens: opts.maxTokens ?? 2000,
+        temperature: opts.temperature ?? 0,
         messages: [
           {
             role: "user",
