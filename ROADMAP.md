@@ -127,6 +127,16 @@ Whisper passes the `stt-lab` gate at parity with external STT on a voice-note co
 
 ### Track 4 — Hono edge API + Docker + Runpod
 
+**Status — v1 synchronous slice SHIPPED (`apps/runner`, 2026-08):** a single-container
+Hono service (`@hono/node-server`, header-token auth, `POST /parse` mirroring studygram's
+`parse-document` contract) running liteparse-core with the SAME PP-OCRv4 models as the
+browser on `onnxruntime-node`, models baked into the image at sha256-pinned URLs. It
+exists to give server-side parses browser parity (raster + local OCR before VLM) —
+deployed on the existing Easypanel VPS via `apps/runner/Dockerfile`. The tasks below
+(async job contract, queue/state infra, page-level fan-out, quotas/metering) are the
+multi-tenant product shape this v1 deliberately defers; v1 serves one trusted caller
+(studygram edge functions) synchronously.
+
 **Why:** turns liteparse from a library into a product external services call. Highest
 commercial value; sharpest technical constraints. **Decided: TS-everywhere** — the GPU
 worker is TS + `onnxruntime-node` (+ CUDA EP), Runpod Serverless primary.

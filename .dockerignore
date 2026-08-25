@@ -1,0 +1,15 @@
+# Build context for `docker build -f apps/runner/Dockerfile .` — keep the
+# uploaded context small; the Dockerfile COPYs exactly what each stage needs.
+**/node_modules
+**/dist
+**/coverage
+
+# Local model downloads (image fetches its own sha256-pinned copies)
+apps/runner/models/rapidocr
+
+# Not part of any build stage
+**/test
+**/*.test.ts
+.git
+.gitignore
+public
