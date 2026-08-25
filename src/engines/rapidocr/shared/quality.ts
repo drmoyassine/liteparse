@@ -21,14 +21,20 @@
  * If the doc mean drops below this floor, the OCR text is DISCARDED (returned as "") so the
  * liteparse cascade under-yields and the existing fallback path re-reads the document via
  * the VLM — which handles this kind of content far better than a CTC rec model. Risk
- * (1 − confidence) must stay ≤ 10%, else escalate to VLM.
+ * (1 − confidence) must stay ≤ 15%, else escalate to VLM.
  *
  * Idiomatic: liteparse's own Granite engine uses the identical pattern (`confidence < 0.2
- * → {text:""}` → cascade descends). 0.90 is the initial spec; the per-box/doc confidence
- * logs let you calibrate — if clean docs start escalating to VLM, lower this; if garbage
- * survives, raise it or switch to a per-box rule.
+ * → {text:""}` → cascade descends). Calibrated: 0.90 initial spec; lowered to 0.85 on
+ * 2026-08-26 after a real scanned passport (runner prod log) read CORRECTLY at doc conf
+ * 0.899 yet escalated — the two MRZ lines were 43% of the doc's chars (monospace `<` runs
+ * read at 0.745/0.933 CTC confidence), structurally dragging the length-weighted mean to
+ * ~0.87–0.90 on ANY perfectly-read MRZ-bearing doc (passport/visa/ID). Every one would
+ * have paid a ~24s VLM leg for text local OCR already had. At 0.85 the garbage class
+ * (stylized/colored text, observed ~0.5–0.7) is still gated hard. Keep calibrating via
+ * the per-box/doc confidence logs: clean docs escalating → lower; garbage surviving →
+ * raise or switch to a per-box rule.
  */
-export const OCR_CONFIDENCE_FLOOR = 0.90;
+export const OCR_CONFIDENCE_FLOOR = 0.85;
 
 /**
  * Per-box recognition confidence floor. A box whose CTC confidence falls below this is
