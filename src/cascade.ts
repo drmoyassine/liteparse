@@ -110,6 +110,7 @@ function synthesizeFromWholeDoc(text: string, providerName: string, kind: DocKin
       nativePages: 0,
       ocrPages: pages.length,
       vlmPages: 0,
+      sttPages: 0,
       truncated: false,
       chars: trimmed.length,
     },

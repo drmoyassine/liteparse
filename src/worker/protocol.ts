@@ -31,6 +31,7 @@ export type ProgressStage =
   | "rapidocr"
   | "granite"
   | "vlm"
+  | "stt" // audio transcription (Moonshine / external gateway)
   | "finalizing"; // assembling ParsedDocument
 
 // ─── Main → Worker ────────────────────────────────────────────────────────────

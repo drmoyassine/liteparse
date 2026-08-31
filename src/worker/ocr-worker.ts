@@ -40,7 +40,8 @@ import type {
 } from "./protocol.js";
 import { loadPdf, extractPageText } from "../pdf.js";
 import { extractDocx, extractXlsx } from "../office.js";
-import { getBrowserOcrEngine } from "../runtime.js";
+import { getBrowserOcrEngine, getBrowserSttEngine } from "../runtime.js";
+import { sttEngineAsOcr } from "../stt/engine.js";
 import { createThrowModelOrigin } from "./model-origin.js";
 import type { ModelOrigin } from "./model-origin.js";
 import { abortError, isAbortError } from "../abort.js";
@@ -72,6 +73,9 @@ function engineToSource(engine: ExtractionEngine): PageSource {
       return "ocr";
     case "vlm":
       return "vlm";
+    case "moonshine":
+    case "stt-gateway":
+      return "stt";
   }
 }
 
@@ -84,6 +88,9 @@ function engineToStage(engine: ExtractionEngine): ProgressStage {
       return "granite";
     case "vlm":
       return "vlm";
+    case "moonshine":
+    case "stt-gateway":
+      return "stt";
     default:
       return "finalizing";
   }
@@ -122,6 +129,7 @@ function buildParsedDocument(
       nativePages: pages.filter((p) => p.source === "native").length,
       ocrPages: pages.filter((p) => p.source === "ocr").length,
       vlmPages: pages.filter((p) => p.source === "vlm").length,
+      sttPages: pages.filter((p) => p.source === "stt").length,
       truncated: false,
       chars: text.length,
     },
@@ -452,14 +460,16 @@ export function getWorkerModelOrigin(): ModelOrigin {
   return workerConfig.modelOrigin ?? createThrowModelOrigin();
 }
 
-/** Build the {@link ExecuteRouteDeps} from config + the registered browser OCR engine. */
+/** Build the {@link ExecuteRouteDeps} from config + the registered browser engines. */
 function buildWorkerDeps(): ExecuteRouteDeps {
   const registered = getBrowserOcrEngine();
+  const registeredStt = getBrowserSttEngine();
   return {
     pdfjs: workerConfig.pdfjs,
     raster: workerConfig.raster,
     engines: {
       ...(registered ? { rapidocr: registered } : {}),
+      ...(registeredStt ? { moonshine: sttEngineAsOcr(registeredStt) } : {}),
       ...workerConfig.engines,
     },
     extractors: {

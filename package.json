@@ -52,6 +52,11 @@
       "import": "./dist/vlm/server.js",
       "require": "./dist/vlm/server.cjs"
     },
+    "./stt/server": {
+      "types": "./dist/stt/server.d.ts",
+      "import": "./dist/stt/server.js",
+      "require": "./dist/stt/server.cjs"
+    },
     "./engines/rapidocr": {
       "types": "./dist/engines/rapidocr.d.ts",
       "import": "./dist/engines/rapidocr.js",

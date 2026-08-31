@@ -401,3 +401,71 @@ describe("executeRoute — page budget & per-page timeout", () => {
     expect(res.document.warnings.some((w) => w.includes("timed out"))).toBe(true);
   });
 });
+
+// ─── audio (Track 3 STT engines) ─────────────────────────────────────────────
+
+describe("executeRoute — audio (STT engines)", () => {
+  it("runs the clip as a single page through a wired STT engine (source stt)", async () => {
+    const res = await executeRoute(
+      makeInput(profile("audio"), [strat("moonshine"), strat("stt-gateway")]),
+      { engines: { moonshine: fakeEngine("moonshine-fake", "transcribed words") } },
+    );
+    expect(res.engine).toBe("moonshine");
+    expect(res.document.source).toBe("stt");
+    expect(res.document.text).toBe("transcribed words");
+    expect(res.document.pages).toEqual([
+      { index: 0, text: "transcribed words", source: "stt" },
+    ]);
+    expect(res.document.meta.sttPages).toBe(1);
+    expect(res.document.meta.ocrPages).toBe(0);
+  });
+
+  it("reports progress under the stt stage", async () => {
+    const stages: string[] = [];
+    await executeRoute(makeInput(profile("audio"), [strat("moonshine")]), {
+      engines: { moonshine: fakeEngine("moonshine-fake", "some words") },
+      onProgress: (e) => stages.push(e.stage),
+    });
+    expect(stages).toEqual(["stt"]);
+  });
+
+  it("falls through moonshine → stt-gateway on under-yield (both tagged stt)", async () => {
+    const res = await executeRoute(
+      makeInput(profile("audio"), [strat("moonshine"), strat("stt-gateway")]),
+      {
+        engines: {
+          moonshine: fakeEngine("moonshine-fake", ""), // under the usable floor
+          "stt-gateway": fakeEngine("stt-gateway", "rescued text"),
+        },
+      },
+    );
+    expect(res.engine).toBe("stt-gateway");
+    expect(res.document.source).toBe("stt");
+    expect(res.document.meta.sttPages).toBe(1);
+    expect(res.document.warnings.some((w) => w.includes("moonshine-fake"))).toBe(true);
+  });
+
+  it("records an honest 'not wired' warning when no STT engine exists", async () => {
+    const res = await executeRoute(makeInput(profile("audio"), [strat("stt-gateway")]), {});
+    expect(res.engine).toBeUndefined();
+    expect(res.document.text).toBe("");
+    expect(res.document.source).toBe("none");
+    expect(
+      res.document.warnings.some((w) => w.includes("stt-gateway") && w.includes("not wired")),
+    ).toBe(true);
+  });
+
+  it("bounds a stuck STT decode with perPageTimeoutMs (no hang)", async () => {
+    const hanging: OcrEngine = {
+      name: "moonshine-fake",
+      available: true,
+      recognize: () => new Promise<{ text: string }>(() => {}),
+    };
+    const res = await executeRoute(
+      { ...makeInput(profile("audio"), [strat("moonshine")]), perPageTimeoutMs: 30 },
+      { engines: { moonshine: hanging } },
+    );
+    expect(res.engine).toBeUndefined();
+    expect(res.document.warnings.some((w) => w.includes("timed out"))).toBe(true);
+  });
+});

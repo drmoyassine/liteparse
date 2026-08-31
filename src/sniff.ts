@@ -20,6 +20,10 @@ const MAGIC = {
   bmp: [0x42, 0x4d], // BM
   zip: [0x50, 0x4b, 0x03, 0x04], // PK..  (also 05 06 / 07 08)
   ole: [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1], // legacy OLE2 (doc/xls/ppt)
+  ogg: [0x4f, 0x67, 0x67, 0x53], // OggS (vorbis/opus)
+  flac: [0x66, 0x4c, 0x61, 0x43], // fLaC
+  id3: [0x49, 0x44, 0x33], // ID3-tagged MP3
+  ebml: [0x1a, 0x45, 0xdf, 0xa3], // EBML (webm/mka container)
 };
 
 function startsWith(bytes: Uint8Array, sig: number[], offset = 0): boolean {
@@ -41,6 +45,9 @@ function containsAscii(bytes: Uint8Array, needle: string, scanLimit = 4096): boo
 
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif"]);
 const TEXT_EXTS = new Set(["txt", "md", "markdown", "json", "xml", "html", "htm", "log", "csv"]);
+const AUDIO_EXTS = new Set([
+  "mp3", "wav", "ogg", "oga", "opus", "flac", "m4a", "aac", "wma", "aiff", "aif", "webm",
+]);
 
 function extOf(filename?: string): string | undefined {
   if (!filename) return undefined;
@@ -65,6 +72,7 @@ function mimeToKind(mime?: string): DocKind | undefined {
     return "xlsx";
   if (mime === "text/csv") return "csv";
   if (mime.startsWith("text/")) return "text";
+  if (mime.startsWith("audio/")) return "audio";
   return undefined;
 }
 
@@ -82,10 +90,40 @@ export function sniff({ bytes, filename, mime }: SniffInput): SniffResult {
     if (startsWith(bytes, MAGIC.jpg)) return { kind: "image", warnings };
     if (startsWith(bytes, MAGIC.gif)) return { kind: "image", warnings };
     if (startsWith(bytes, MAGIC.bmp)) return { kind: "image", warnings };
+
+    // ── Audio containers (Track 3: audio documents route to STT). ──
+    if (startsWith(bytes, MAGIC.ogg)) return { kind: "audio", warnings };
+    if (startsWith(bytes, MAGIC.flac)) return { kind: "audio", warnings };
+    // MP3: ID3v2 tag, or a bare MPEG frame sync (0xFF 0xE*). JPEG (0xFF 0xD8)
+    // was already matched above, so the frame sync can't collide with it.
+    if (startsWith(bytes, MAGIC.id3)) return { kind: "audio", warnings };
+    if (bytes[0] === 0xff && (bytes[1]! & 0xe0) === 0xe0) {
+      return { kind: "audio", warnings };
+    }
+    // EBML (webm/mka container): audio only when the extension says audio/webm
+    // or the stream carries an Opus track header — video webm stays "other".
+    if (startsWith(bytes, MAGIC.ebml)) {
+      const ext = extOf(filename);
+      if (ext === "webm" || ext === "mka" || containsAscii(bytes, "OpusHead")) {
+        return { kind: "audio", warnings };
+      }
+    }
+    // ISO-BMFF audio (m4a): "ftyp" at offset 4 with an M4A brand at 8.
+    if (
+      bytes.length >= 12 &&
+      containsAscii(bytes.subarray(4, 8), "ftyp") &&
+      containsAscii(bytes.subarray(8, 12), "M4A ")
+    ) {
+      return { kind: "audio", warnings };
+    }
     if (startsWith(bytes, MAGIC.webp)) {
-      // RIFF container: confirm WEBP at offset 8 to avoid classifying WAV as image.
+      // RIFF container: confirm WEBP (image) or WAVE (audio) at offset 8.
       if (bytes.length >= 12 && containsAscii(bytes.subarray(0, 12), "WEBP"))
         return { kind: "image", warnings };
+      // Track 3: WAV is a first-class audio document (routes to STT). Previously
+      // fell through to "other".
+      if (bytes.length >= 12 && containsAscii(bytes.subarray(0, 12), "WAVE"))
+        return { kind: "audio", warnings };
     }
     if (startsWith(bytes, MAGIC.ole)) {
       warnings.push("legacy_office_not_supported: legacy .doc/.xls/.ppt (OLE2) cannot be parsed; convert to .docx/.xlsx");
@@ -120,6 +158,7 @@ export function sniff({ bytes, filename, mime }: SniffInput): SniffResult {
     return { kind: "other", warnings };
   }
   if (IMAGE_EXTS.has(ext ?? "")) return { kind: "image", warnings };
+  if (AUDIO_EXTS.has(ext ?? "")) return { kind: "audio", warnings };
   if (TEXT_EXTS.has(ext ?? "")) return { kind: ext === "csv" ? "csv" : "text", warnings };
 
   const byMime = mimeToKind(mime);

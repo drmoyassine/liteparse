@@ -43,7 +43,9 @@ export type ExtractionEngine =
   | "text" // readAsText (.txt / .md / .csv)
   | "rapidocr" // PaddleOCR detection + recognition (raw text)
   | "granite-docling" // 258M structure-aware VLM (text + layout/tables/reading-order)
-  | "vlm"; // hosted vision LLM — true last resort
+  | "vlm" // hosted vision LLM — true last resort
+  | "moonshine" // local Moonshine STT (audio documents; browser WASM / runner)
+  | "stt-gateway"; // external STT gateway (audio docs) — quality ceiling / fallback
 
 /** Where a strategy executes. Browser = the Web Worker; edge = the serverless service. */
 export type ExecutionLocation = "browser" | "edge";
@@ -122,4 +124,8 @@ export interface RouteOptions {
   edgeUrl?: string;
   /** Whether a hosted VLM gateway is configured (enables the `vlm` last resort). */
   vlmEnabled?: boolean;
+  /** Whether a local STT engine is wired (enables the `moonshine` audio leg). */
+  sttLocalEnabled?: boolean;
+  /** Whether an external STT gateway is configured (audio docs). */
+  sttGatewayEnabled?: boolean;
 }

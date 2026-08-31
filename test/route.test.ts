@@ -215,6 +215,41 @@ describe("routeDocument — scanned PDF", () => {
   });
 });
 
+// ─── audio (Track 3 STT cascade) ─────────────────────────────────────────────
+
+describe("routeDocument — audio (STT cascade)", () => {
+  it("local engine + gateway → browser moonshine, then edge stt-gateway", () => {
+    const d = routeDocument(profile({ kind: "audio" }), caps(), {
+      sttLocalEnabled: true,
+      sttGatewayEnabled: true,
+    });
+    expect(engines(d.strategies)).toEqual(["moonshine@browser", "stt-gateway@edge"]);
+  });
+
+  it("gateway only → edge stt-gateway alone (external-first configuration)", () => {
+    const d = routeDocument(profile({ kind: "audio" }), caps(), { sttGatewayEnabled: true });
+    expect(engines(d.strategies)).toEqual(["stt-gateway@edge"]);
+  });
+
+  it("node runtime places the local leg on the edge", () => {
+    const d = routeDocument(profile({ kind: "audio" }), caps({ runtime: "node" }), {
+      sttLocalEnabled: true,
+      sttGatewayEnabled: true,
+    });
+    expect(engines(d.strategies)).toEqual(["moonshine@edge", "stt-gateway@edge"]);
+  });
+
+  it("with nothing wired, still emits the external leg — never the text extractor", () => {
+    // executeRoute then records "engine not wired, skipping" so the caller gets an
+    // honest empty result + warning. Routing audio to `text` instead would decode
+    // binary audio as mojibake that clears the usable-char floor: wrong text.
+    const d = routeDocument(profile({ kind: "audio" }), caps());
+    expect(engines(d.strategies)).toEqual(["stt-gateway@edge"]);
+    expect(d.strategies[0]?.reason).toContain("no gateway configured");
+    expect(d.strategies.some((s) => s.engine === "text")).toBe(false);
+  });
+});
+
 // ─── ambiguous / edge cases ──────────────────────────────────────────────────
 
 describe("routeDocument — ambiguous & fallback cases", () => {
@@ -296,6 +331,8 @@ describe("routeDocument — decision shape", () => {
       "rapidocr",
       "granite-docling",
       "vlm",
+      "moonshine",
+      "stt-gateway",
     ];
     const d = routeDocument(
       profile({ kind: "pdf", pages: 5, scanned: null }),

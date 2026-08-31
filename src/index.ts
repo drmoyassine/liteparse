@@ -38,10 +38,12 @@ export type {
 // the `exports` subpaths, so re-export here to keep consumers on the public surface.
 export { canvasRaster } from "./raster/canvas.js";
 export { setBrowserOcrEngine, getBrowserOcrEngine } from "./runtime.js";
+export { setBrowserSttEngine, getBrowserSttEngine } from "./runtime.js";
 export type {
   ParseOptions,
   ParsedDocument,
   Page,
+  PageSource,
   DocKind,
 } from "./types.js";
 export type {
@@ -53,10 +55,19 @@ export type {
   VlmGateway,
   VlmReadOptions,
   WholeDocOcrProvider,
+  SttGateway,
+  SttEngine,
+  SttResult,
+  SttTranscribeOptions,
   PdfDocumentLike,
   PdfPageLike,
   PdfLibrary,
 } from "./types.js";
+// Track 3 (speech): reference external-STT gateway for OpenAI-compatible
+// /v1/audio/transcriptions. Same subpath pattern as ./vlm/server — re-exported
+// here for convenience; the subpath stays the canonical import for consumers.
+export { createServerSttGateway } from "./stt/gateway.server.js";
+export type { ServerSttOptions } from "./stt/gateway.server.js";
 
 // Intelligent Document Router (0.3.0+) — contracts only for now; the classify /
 // capabilities / route functions ship in later phases. See ARCHITECTURE.md.

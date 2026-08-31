@@ -186,6 +186,32 @@ export function routeDocument(
       ];
       break;
 
+    // ── Audio: local STT first (Moonshine), external gateway as ceiling/fallback. ──
+    case "audio": {
+      const sttStrategies: RouteStrategy[] = [];
+      if (opts?.sttLocalEnabled) {
+        sttStrategies.push({
+          engine: "moonshine",
+          location: inBrowser ? "browser" : "edge",
+          reason: "local Moonshine transcription",
+        });
+      }
+      // The external leg is emitted unconditionally, not only when a gateway is
+      // configured: with nothing wired, executeRoute records "engine not wired,
+      // skipping" and the caller gets an honest empty result + warning. Routing
+      // audio to the `text` extractor instead would decode binary audio as
+      // mojibake that clears the usable-char floor — wrong text, not less text.
+      sttStrategies.push({
+        engine: "stt-gateway",
+        location: "edge",
+        reason: opts?.sttGatewayEnabled
+          ? "external STT (quality ceiling / fallback)"
+          : "external STT (no gateway configured)",
+      });
+      strategies = sttStrategies;
+      break;
+    }
+
     // ── Image / screenshot: full OCR chain; executeRoute stops at the first tier that yields usable text. ──
     case "image":
       strategies = ocrChain(profile, capabilities, webgpuCap, wasmCap, vlmEnabled);

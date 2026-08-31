@@ -7,10 +7,18 @@
  */
 
 /** Coarse content category inferred from magic bytes / extension / mime. */
-export type DocKind = "pdf" | "docx" | "xlsx" | "csv" | "image" | "text" | "other";
+export type DocKind =
+  | "pdf"
+  | "docx"
+  | "xlsx"
+  | "csv"
+  | "image"
+  | "text"
+  | "audio"
+  | "other";
 
 /** How the text for a single page was produced. */
-export type PageSource = "native" | "ocr" | "vlm";
+export type PageSource = "native" | "ocr" | "vlm" | "stt";
 
 /** Document-level source, derived from the per-page sources. */
 export type DocumentSource = PageSource | "mixed" | "none";
@@ -31,6 +39,8 @@ export interface ParsedMeta {
   nativePages: number;
   ocrPages: number;
   vlmPages: number;
+  /** Pages whose text came from speech transcription (always 0 or 1 — one clip). */
+  sttPages: number;
   truncated: boolean;
   chars: number;
 }
@@ -148,6 +158,57 @@ export interface VlmGateway {
   readImage(png: Uint8Array, opts?: VlmReadOptions): Promise<string>;
 }
 
+/** Options passed to {@link SttGateway.transcribe} / {@link SttEngine.transcribe}. */
+export interface SttTranscribeOptions {
+  /** Original filename (a format hint for providers / engines). */
+  filename?: string;
+  /** MIME type of the audio bytes (e.g. audio/wav, audio/webm). */
+  mime?: string;
+  /** Spoken-language hint. Omitted ⇒ the engine/gateway auto-detects. */
+  language?: "en" | "ar";
+  signal?: AbortSignal;
+}
+
+/** Result of a transcription. */
+export interface SttResult {
+  text: string;
+  /**
+   * 0–1 confidence if the engine reports one (local autoregressive engines do;
+   * external gateways typically don't). Used by the confidence-gated cascade.
+   */
+  confidence?: number;
+  /** Language actually transcribed (e.g. "en"), if known. */
+  language?: string;
+}
+
+/**
+ * Injected speech-to-text gateway — the audio counterpart of {@link VlmGateway}.
+ * The consumer implements this against their own provider (an OpenAI-compatible
+ * `/v1/audio/transcriptions` endpoint). Implementations must resolve
+ * `{ text: "" }` (not throw) when they cannot transcribe, so the cascade can
+ * fall through — the same contract as VlmGateway.
+ */
+export interface SttGateway {
+  /**
+   * Transcribe the audio clip verbatim and return it as plain text.
+   * Should return "" (not throw) when the clip can't be transcribed.
+   */
+  transcribe(audio: Uint8Array, opts?: SttTranscribeOptions): Promise<SttResult>;
+}
+
+/**
+ * Local STT engine (Moonshine via onnxruntime) — the audio counterpart of
+ * {@link OcrEngine}. Reports honest per-clip confidence; the caller (pipeline /
+ * runner service) applies the confidence gate and escalates to the gateway.
+ */
+export interface SttEngine {
+  transcribe(audio: Uint8Array, opts?: SttTranscribeOptions): Promise<SttResult>;
+  readonly available: boolean;
+  readonly name: string;
+  /** Release model sessions (engine lifecycle / LRU pressure). */
+  dispose?(): void;
+}
+
 /** Options for {@link parseDocument}. */
 export interface ParseOptions {
   /** Original filename (used for sniffing when magic bytes are ambiguous). */
@@ -173,6 +234,19 @@ export interface ParseOptions {
   ocrEngine?: OcrEngine;
   /** Inject a VLM gateway used as the OCR fallback and for raw images. */
   vlm?: VlmGateway;
+  /**
+   * Inject an STT gateway used to transcribe audio documents (the external tier:
+   * quality ceiling and fallback for local STT). Reference implementation:
+   * `createServerSttGateway` (subpath `liteparse/stt/server`).
+   */
+  stt?: SttGateway;
+  /**
+   * Inject a local STT engine (Moonshine) for audio documents. Wins over the
+   * engine registered via `setBrowserSttEngine`.
+   */
+  sttEngine?: SttEngine;
+  /** Spoken-language hint for audio documents. Default: auto-detect. */
+  sttLanguage?: "en" | "ar";
   /** Inject a configured pdfjs instance (avoids CDN/worker setup). */
   pdfjs?: PdfLibrary;
   /** Abort parsing. */

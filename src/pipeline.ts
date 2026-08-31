@@ -1,6 +1,6 @@
 import { decodeText, extractDocx, extractXlsx } from "./office.js";
 import { extractPageText, loadPdf } from "./pdf.js";
-import { resolveOcr, resolveRaster } from "./runtime.js";
+import { resolveOcr, resolveRaster, resolveStt } from "./runtime.js";
 import { classifyDocument } from "./router/classify.js";
 import { detectCapabilities } from "./router/capabilities.js";
 import { routeDocument } from "./router/route.js";
@@ -8,12 +8,14 @@ import { executeRoute } from "./worker/ocr-worker.js";
 import type { ExecuteRouteDeps, TextExtractor } from "./worker/ocr-worker.js";
 import { createGraniteDoclingEngine } from "./ocr/granite-docling.js";
 import { createVlmOcrEngine } from "./ocr/vlm.js";
+import { createSttGatewayEngine, sttEngineAsOcr } from "./stt/engine.js";
 import type {
   DocKind,
   OcrEngine,
   ParseOptions,
   ParsedDocument,
   ParsedMeta,
+  SttEngine,
 } from "./types.js";
 import type { ExtractionEngine } from "./router/types.js";
 import { abortError } from "./abort.js";
@@ -81,6 +83,7 @@ function emptyResult(kind: DocKind, warnings: string[]): ParsedDocument {
     nativePages: 0,
     ocrPages: 0,
     vlmPages: 0,
+    sttPages: 0,
     truncated: false,
     chars: 0,
   };
@@ -110,6 +113,7 @@ async function joinPdfText(
 async function buildRouteDeps(
   opts: ParseOptions,
   capabilities: ReturnType<typeof detectCapabilities>,
+  sttEngine: SttEngine | null,
 ): Promise<ExecuteRouteDeps> {
   const [ocr, raster] = await Promise.all([resolveOcr(opts), resolveRaster(opts)]);
 
@@ -126,6 +130,15 @@ async function buildRouteDeps(
   };
   if (opts.vlm) {
     engines.vlm = createVlmOcrEngine(opts.vlm);
+  }
+  // Audio legs (Track 3): local Moonshine first when an engine is injected or
+  // registered, then the external gateway. Audio bytes flow through the same
+  // page-image machinery as images (the clip IS the single page).
+  if (sttEngine) {
+    engines.moonshine = sttEngineAsOcr(sttEngine, opts.sttLanguage);
+  }
+  if (opts.stt) {
+    engines["stt-gateway"] = createSttGatewayEngine(opts.stt, opts.sttLanguage);
   }
 
   const extractors: Partial<Record<ExtractionEngine, TextExtractor>> = {
@@ -198,10 +211,15 @@ export async function parseDocument(
 
   // 2) route → ordered execution plan (the routing matrix as code).
   const capabilities = detectCapabilities();
-  const route = routeDocument(profile, capabilities, { vlmEnabled: !!opts.vlm });
+  const sttEngine = resolveStt(opts);
+  const route = routeDocument(profile, capabilities, {
+    vlmEnabled: !!opts.vlm,
+    sttLocalEnabled: !!sttEngine,
+    sttGatewayEnabled: !!opts.stt,
+  });
 
   // 3) execute → walk the plan, wiring engines/extractors from ParseOptions.
-  const deps = await buildRouteDeps(opts, capabilities);
+  const deps = await buildRouteDeps(opts, capabilities, sttEngine);
   const { document } = await executeRoute(
     {
       bytes,

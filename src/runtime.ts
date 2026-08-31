@@ -1,6 +1,6 @@
 import { noneOcr } from "./ocr/none.js";
 import { noneRaster } from "./raster/none.js";
-import type { OcrEngine, ParseOptions, RasterAdapter } from "./types.js";
+import type { OcrEngine, ParseOptions, RasterAdapter, SttEngine } from "./types.js";
 
 /**
  * Adapter resolution. Platform-specific adapters are reached only through lazy
@@ -66,6 +66,33 @@ export function setBrowserOcrEngine(engine: OcrEngine | null): void {
 
 export function getBrowserOcrEngine(): OcrEngine | null {
   return registeredBrowserOcr;
+}
+
+/**
+ * One-time browser STT registry — the audio counterpart of the OCR registry above.
+ * A consumer wires a local STT engine (Moonshine) once at app start;
+ * `parseDocument` then routes audio documents through it before the external
+ * `stt-gateway` leg. Stays `null` otherwise (external-only STT).
+ */
+let registeredBrowserStt: SttEngine | null = null;
+
+export function setBrowserSttEngine(engine: SttEngine | null): void {
+  registeredBrowserStt = engine;
+}
+
+export function getBrowserSttEngine(): SttEngine | null {
+  return registeredBrowserStt;
+}
+
+/**
+ * Resolve a local STT engine: explicit injection (`ParseOptions.sttEngine`) wins,
+ * else the registered browser engine, else null (audio goes straight to the
+ * external gateway leg). Unlike OCR there is no `none` placeholder — absence is
+ * expressed by the route omitting the `moonshine` leg.
+ */
+export function resolveStt(opts: ParseOptions): SttEngine | null {
+  if (opts.sttEngine) return opts.sttEngine;
+  return registeredBrowserStt;
 }
 
 /** Resolve an OCR engine: explicit injection wins; "off" or nothing → `none`. */

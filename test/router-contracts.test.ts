@@ -65,6 +65,7 @@ function ocrDocument(text = "extracted text"): ParsedDocument {
       nativePages: 0,
       ocrPages: 1,
       vlmPages: 0,
+      sttPages: 0,
       truncated: false,
       chars: text.length,
     },
