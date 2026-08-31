@@ -17,6 +17,7 @@ function fakeDoc(over: Partial<ParsedDocument> = {}): ParsedDocument {
       nativePages: 0,
       ocrPages: 2,
       vlmPages: 0,
+      sttPages: 0,
       truncated: false,
       chars: 13,
     },
