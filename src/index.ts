@@ -68,6 +68,23 @@ export type {
 // here for convenience; the subpath stays the canonical import for consumers.
 export { createServerSttGateway } from "./stt/gateway.server.js";
 export type { ServerSttOptions } from "./stt/gateway.server.js";
+// Track 3 (speech): the local Moonshine engine for Node (onnxruntime-node) is
+// subpath-only ("liteparse/stt/moonshine-server"), like ./ocr/rapidocr-server —
+// it imports node builtins and must stay out of the isomorphic core bundle.
+// The runtime-agnostic STT core it shares with the (Phase C) browser engine is
+// pure TS, so it re-exports here (stt-lab + gateway consumers want the floors
+// and descriptors without the engine).
+export { STT_CONFIDENCE_FLOOR, sttFloorFor } from "./engines/moonshine/shared/confidence.js";
+export {
+  DEFAULT_STT_MODEL,
+  ESCALATION_STT_MODEL,
+  MOONSHINE_MODELS,
+} from "./engines/moonshine/shared/models.js";
+export type {
+  MoonshineModelDescriptor,
+  MoonshineModelId,
+  SttLanguage,
+} from "./engines/moonshine/shared/models.js";
 
 // Intelligent Document Router (0.3.0+) — contracts only for now; the classify /
 // capabilities / route functions ship in later phases. See ARCHITECTURE.md.

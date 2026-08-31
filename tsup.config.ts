@@ -23,6 +23,7 @@ export default defineConfig({
     "ocr/rapidocr-server": "src/ocr/rapidocr-server.ts",
     "vlm/server": "src/examples/vlm-gateway.server.ts",
     "stt/server": "src/stt/gateway.server.ts",
+    "stt/moonshine-server": "src/stt/moonshine-server.ts",
     "engines/rapidocr": "src/engines/rapidocr/index.ts",
   },
   format: ["esm", "cjs"],

@@ -153,6 +153,14 @@ export. Mixed AR/EN quality is therefore a property of the model we already run;
   standard transformers.js merged export: `input_ids`, `encoder_hidden_states`,
   `past_key_values.{0-5}.{decoder,encoder}.{key,value}`, `use_cache_branch` →
   **`logits`** + `present.*`. Classic `.onnx` loads from bytes in BOTH runtimes.
+  **Cache-branch quirk (probed 2026-09-01, real-model smoke):** with
+  `use_cache_branch=1` the export emits **broken encoder-KV presents**
+  (`[0,8,1,36]`, dim 0 zeroed); feeding one back fails encoder_attn's MatMul on the
+  next step. That branch recomputes cross-KV from `encoder_hidden_states` each
+  step, so the decoder loop must keep the encoder past **empty** and thread only
+  the decoder self-KV (`present.{l}.decoder.*`). Encoded once in
+  `src/stt/moonshine-server.ts` `decodeBatch`; the Phase C browser engine reuses
+  the same loop and inherits the fix.
 - **Streaming-AR**: checkpoint exists (MIT) but **no ONNX export anywhere** — the
   cascade's AR legs run batch tiny-ar. If streaming-AR ONNX ever appears (official
   export or ours), it can slot in without architecture changes.
@@ -215,10 +223,12 @@ studygram-app):**
 
 **Dependencies / blockers:** none architectural — the 2026-09-01 spike resolved the
 `.ort` loadability question in **both** runtimes (all green) and the base-EN license
-(MIT). Remaining gates: the `tiny-ar` "other" license text (before any *public* image
-distribution — internal bake and npm-free fetching are fine), decoder self-KV initial
-state shapes (lift from the reference streaming runtime in B.2; cross-KV shape is
-already known), and `stt-lab`'s dialect verdict. Track 1 (int8) is mostly free on the
+(MIT), and the B.2 decoder probes + real-model smoke resolved every decode-loop
+shape question (streaming self-KV `[6,1,8,0,40]`, batch past `[1,8,0,36]`, and the
+cache-branch encoder-KV quirk above — both families now transcribe real audio
+end-to-end). Remaining gates: the `tiny-ar` "other" license text (before any *public*
+image distribution — internal bake and npm-free fetching are fine) and `stt-lab`'s
+dialect verdict. Track 1 (int8) is mostly free on the
 AR/batch side (int8 exports exist); EN streaming `.ort` ships fp32 — int8 conversions
 are a size optimization, not a blocker.
 **Done when:** v0 — file STT via gateway with graceful degradation; v0.5 — runner serves

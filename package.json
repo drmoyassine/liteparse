@@ -57,6 +57,11 @@
       "import": "./dist/stt/server.js",
       "require": "./dist/stt/server.cjs"
     },
+    "./stt/moonshine-server": {
+      "types": "./dist/stt/moonshine-server.d.ts",
+      "import": "./dist/stt/moonshine-server.js",
+      "require": "./dist/stt/moonshine-server.cjs"
+    },
     "./engines/rapidocr": {
       "types": "./dist/engines/rapidocr.d.ts",
       "import": "./dist/engines/rapidocr.js",
