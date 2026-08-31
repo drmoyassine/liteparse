@@ -229,9 +229,43 @@ export. Mixed AR/EN quality is therefore a property of the model we already run;
       (`shared/stats.ts` `sttDebugLine`; debug-gated like OCR telemetry).
       *(Shipped 2026-09-01, Phases B.2/C.)*
 
-**v1b — browser local, live dictation (streaming):** see the D1/D2 split — VAD-chunked
-batch always feasible; true incremental decode if the streaming state tensors carry
-(which the spike confirmed: frontend/decoder expose state outputs).
+**v1b — browser local, live dictation (streaming):** the D1/D2 split from the plan —
+D1 (VAD-chunked batch) shipped; D2 (true incremental decode) remains gated on a live spike.
+
+- [x] Dictation protocol, deliberately separate from the parse worker protocol
+      (long-lived bidirectional chunk stream with recurring interims vs
+      request/response + single terminal ResultEvent):
+      `src/stt/streaming/protocol.ts` — start/chunk/stop → ready/interim/final/
+      error/stopped + guards. *(Shipped 2026-09-01, Phase D.)*
+- [x] RMS utterance segmentation (pure, no ML): `src/stt/streaming/segmentation.ts` —
+      speech threshold + 480 ms hangover close, 240 ms blip filter measured on SPEECH
+      content (the quiet tail can't rescue a click), 160 ms pre-roll, 15 s force-final,
+      flush-on-stop keeps short finals. *(Shipped 2026-09-01, Phase D.)*
+- [x] Capture worklet (`liteparse/stt/worklet`, zero-import): mono mixdown + exact
+      100 ms frames at the CONTEXT rate — no resample in the worklet (the
+      quality-critical sinc resampler lives in testable `shared/audio.ts`; linear
+      downsampling in the worklet would alias speech energy above 8 kHz back into
+      band on 44.1/48 kHz contexts). *(Shipped 2026-09-01, Phase D.)*
+- [x] Dictation worker (`liteparse/stt/dictation-worker`, self-installing, never
+      imports ocr-worker): resample → segment → transcribe each finalized utterance
+      through the Phase-C Moonshine engine (fed WAV bytes — reuses the engine's whole
+      gate + telemetry path unchanged); finals serialized in utterance order;
+      throttled trailing-buffer interims (first at 900 ms, ≥1.2 s apart, one in
+      flight, superseded previews dropped on arrival); stop flushes and posts
+      `stopped` only after the queue drains. *(Shipped 2026-09-01, Phase D.)*
+- [x] Main-thread client (`liteparse/stt/dictation`, `createDictation`): owns
+      AudioContext + `addModule` + the frame relay (buffer transferred); mic via
+      deviceId (tracks released on stop) or injected MediaStream (caller keeps the
+      tracks); 10 s ready / 30 s stop timeouts; unwind on failed start.
+      *(Shipped 2026-09-01, Phase D.)*
+- [ ] D2 — true incremental decode (`src/stt/streaming/incremental-decoder.ts`,
+      200 ms frontend buffer + 80 ms lookahead, stateful encoder, stepped decoder;
+      TTFT target 0.3–0.6 s). **Entry criterion: a live spike of chunked
+      state-threading semantics against the real `.ort` graphs** — the B.1 spike
+      verified loadability and I/O shapes, never the chunked loop; hermetic mocks
+      cannot catch graph-level quirks (the encoder-KV cache-branch bug is the
+      precedent). D1's re-decode-partial is correct, just not incremental, so v1b
+      ships without D2.
 
 **`stt-lab` — build with v0, gate v1 (the `ocr-lab` analog; lives beside it in
 studygram-app):**

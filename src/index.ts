@@ -99,6 +99,46 @@ export type {
   MoonshineRunnerHandle,
   MoonshineSttEngineOptions,
 } from "./engines/moonshine/index.js";
+// Track 3 (speech) Phase D: live dictation. The client ships from the main
+// entry (createDictation + the protocol surface); the worker and worklet are
+// their own subpaths (liteparse/stt/dictation-worker, liteparse/stt/worklet)
+// that consumers point new Worker()/addModule() at — the same self-hosted-
+// asset pattern as /ort/. The worker's core (createDictationCore) is also
+// importable from the dictation-worker subpath for custom hosts.
+export { createDictation } from "./stt/streaming/dictation-client.js";
+export type {
+  Dictation,
+  DictationConfig,
+  DictationHandlers,
+} from "./stt/streaming/dictation-client.js";
+export type {
+  DictationInbound,
+  DictationOutbound,
+  DictationStart,
+  DictationChunk,
+  DictationStop,
+  DictationReady,
+  DictationInterim,
+  DictationFinal,
+  DictationError,
+  DictationStopped,
+} from "./stt/streaming/protocol.js";
+export {
+  isDictationStart,
+  isDictationChunk,
+  isDictationStop,
+  isDictationReady,
+  isDictationInterim,
+  isDictationFinal,
+  isDictationError,
+  isDictationStopped,
+} from "./stt/streaming/protocol.js";
+export { RmsSegmenter, DEFAULT_VAD_RMS } from "./stt/streaming/segmentation.js";
+export type {
+  SegmentationOptions,
+  Utterance,
+  UtteranceEndReason,
+} from "./stt/streaming/segmentation.js";
 
 // Intelligent Document Router (0.3.0+) — contracts only for now; the classify /
 // capabilities / route functions ship in later phases. See ARCHITECTURE.md.

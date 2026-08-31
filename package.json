@@ -62,6 +62,21 @@
       "import": "./dist/stt/moonshine-server.js",
       "require": "./dist/stt/moonshine-server.cjs"
     },
+    "./stt/worklet": {
+      "types": "./dist/stt/worklet.d.ts",
+      "import": "./dist/stt/worklet.js",
+      "require": "./dist/stt/worklet.cjs"
+    },
+    "./stt/dictation-worker": {
+      "types": "./dist/stt/dictation-worker.d.ts",
+      "import": "./dist/stt/dictation-worker.js",
+      "require": "./dist/stt/dictation-worker.cjs"
+    },
+    "./stt/dictation": {
+      "types": "./dist/stt/dictation.d.ts",
+      "import": "./dist/stt/dictation.js",
+      "require": "./dist/stt/dictation.cjs"
+    },
     "./engines/rapidocr": {
       "types": "./dist/engines/rapidocr.d.ts",
       "import": "./dist/engines/rapidocr.js",

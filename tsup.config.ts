@@ -27,6 +27,12 @@ export default defineConfig({
     "stt/moonshine-server": "src/stt/moonshine-server.ts",
     "engines/rapidocr": "src/engines/rapidocr/index.ts",
     "engines/moonshine": "src/engines/moonshine/index.ts",
+    // Track 3 Phase D (dictation): the worklet entry is STANDALONE (zero
+    // imports — AudioWorklet module), the worker entry self-installs inside a
+    // worker scope, and the client is the main-thread surface.
+    "stt/worklet": "src/stt/streaming/capture-worklet.ts",
+    "stt/dictation-worker": "src/stt/streaming/dictation-worker.ts",
+    "stt/dictation": "src/stt/streaming/dictation-client.ts",
   },
   format: ["esm", "cjs"],
   dts: true,
