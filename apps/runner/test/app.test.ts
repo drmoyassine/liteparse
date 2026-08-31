@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { ParseService } from "../src/service.js";
+import type { SttService } from "../src/stt-service.js";
 import type { ParsedDocument } from "liteparse";
 
 /** A deterministic stand-in ParsedDocument. */
@@ -34,10 +35,12 @@ function buildApp(over: { service?: ParseService; maxBytes?: number; maxConcurre
     apiKey: "test-key-123",
     version: "0.0.0-test",
     service,
+    sttService: vi.fn() as unknown as SttService,
     maxBytes: over.maxBytes ?? 20 * 1024 * 1024,
     maxTotalMs: 5_000,
     maxConcurrency: over.maxConcurrency ?? 2,
     ocrReady: () => true,
+    sttReady: () => true,
     startedAt: Date.now(),
   });
   return { app, service: service as ReturnType<typeof vi.fn> };
@@ -56,6 +59,7 @@ describe("GET /health", () => {
     expect(body.version).toBe("0.0.0-test");
     expect(typeof body.uptime_s).toBe("number");
     expect(body.ocr).toBe("ready");
+    expect(body.stt).toBe("ready");
   });
 
   it("reports ocr unavailable when the engine has not warmed", async () => {
@@ -63,7 +67,9 @@ describe("GET /health", () => {
       apiKey: "k",
       version: "v",
       service: vi.fn() as unknown as ParseService,
+      sttService: vi.fn() as unknown as SttService,
       ocrReady: () => false,
+      sttReady: () => true,
     });
     const body = (await (await app.request("/health")).json()) as Record<string, unknown>;
     expect(body.ocr).toBe("unavailable");

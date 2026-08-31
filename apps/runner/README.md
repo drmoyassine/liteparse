@@ -2,8 +2,9 @@
 
 A self-hosted HTTP service that gives **server-side parses full parity with the
 browser runtime**: PDF rasterization (pdf.js + `@napi-rs/canvas` + sharp),
-local OCR (PP-OCRv4 via `onnxruntime-node`), and optional caller-supplied VLM
-fallback — one process, one container, no serverless canvas limits.
+local OCR (PP-OCRv4 via `onnxruntime-node`), local speech-to-text (Moonshine
+EN/AR via `onnxruntime-node`), and optional caller-supplied VLM/STT fallback —
+one process, one container, no serverless canvas limits.
 
 It exists because serverless runtimes (Supabase edge included) have no canvas:
 scanned/image PDFs — photographed passports, licences, bank statements —
@@ -75,21 +76,82 @@ error response.
 | `500` | Parse failed (incl. the 110s whole-request deadline). Honest message |
 
 **Limits & behavior to plan around:** decoded size cap 20 MB; whole-request
-deadline 110 s (set your client timeout ≥ 120 s); 2 concurrent parses by
-default (`RUNNER_MAX_CONCURRENCY`); `503` + `Retry-After` when full. Local OCR
-first — the VLM leg only runs when local extraction yields nothing, so calls
-**without** `options.vlm` never touch an external model.
+deadline 110 s (set your client timeout ≥ 120 s); 2 concurrent requests by
+default (`RUNNER_MAX_CONCURRENCY` — the budget is **shared with
+`/transcribe`**); `503` + `Retry-After` when full. Local OCR first — the VLM
+leg only runs when local extraction yields nothing, so calls **without**
+`options.vlm` never touch an external model.
+
+### `POST /transcribe`
+
+Speech-to-text with a **local-first escalation walk** (Track 3):
+
+```
+WAV pre-flight → slot 1: Moonshine (language) → conf ≥ floor → done
+                     │ under floor / unavailable
+                     ├─ en → slot 2: Moonshine base-en → conf ≥ floor → done
+                     └─ ar ─────────────────────────────────┐
+                                                               ▼
+                slot 3: caller SttGateway (options.stt) → done / best-effort + warnings
+```
+
+Same auth + envelope as `/parse`. **The audio contract is WAV PCM16** (mono
+16 kHz ideal; other rates/channels are mixed + resampled server-side) —
+browsers decode webm/opus/m4a client-side (`decodeAudioData` → encode WAV) and
+POST the WAV. Anything else → `422` naming the contract.
+
+**Request body** (JSON): `data` (base64 audio, required), `filename?`, and
+`options?`:
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `options.language` | `"en" \| "ar"` | `"en"` | Picks the slot-1 model (EN streaming tiny / AR tiny int8) |
+| `options.keepDiacritics` | boolean | `false` | Default strips Arabic tashkeel |
+| `options.stt` | object | — | **Escalation-only** external gateway (below). Without it the runner is local-only: best-effort text + honest warnings, never an external call |
+
+**`options.stt`** — OpenAI-compatible `/v1/audio/transcriptions` gateway
+(slot 3; the AR quality ceiling). Same redaction rules as `options.vlm`:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `endpoint` | string | ✔ | Transcriptions URL |
+| `apiKey` | string | ✔ | Sent as `Authorization: Bearer <key>` unless `keyHeader` set |
+| `model` | string | ✔ | e.g. `gpt-4o-transcribe` |
+| `keyHeader` | string | — | Custom auth header name |
+| `temperature` | number | `0` | Verbatim transcription — leave at 0 |
+
+**Response `200`** (JSON):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `text` | string | Transcript. Empty string + warnings = honest no-speech |
+| `language` | string | `"en"` \| `"ar"` |
+| `engine` | string | Model id that produced the text (`moonshine-streaming-tiny-en`, `moonshine-batch-tiny-ar`, `moonshine-batch-base-en`) or `stt-gateway` |
+| `confidence` | number \| null | Local mean per-token probability (floors: 0.55 uncalibrated); `null` when the external gateway produced the text |
+| `warnings` | string[] | Every escalation hop that didn't clear its floor, and the best-effort note if nothing did |
+| `duration_ms` | number | Server-side wall time |
+
+**Errors** (`{"error": "…"}`): `400` (bad body/base64/options shape), `401`,
+`405`, `413` (over `RUNNER_STT_MAX_BYTES`, 25 MB default), `422` (not WAV
+PCM16 — the message names the contract), `503` (slots full / no local model
+**and** no gateway), `500` (decode failure incl. the 60 s deadline).
+
+**Shares the concurrency budget with `/parse`** — one box, one budget. A heavy
+STT decode can 503 a parse and vice versa; `RUNNER_MAX_CONCURRENCY` (default 2)
+sizes both.
 
 ### `GET /health`
 
 Unauthenticated (uptime probes):
 
 ```json
-{ "ok": true, "version": "0.3.0", "uptime_s": 3600, "ocr": "ready" }
+{ "ok": true, "version": "0.2.0", "uptime_s": 3600, "ocr": "ready", "stt": "ready" }
 ```
 
 `ocr: "unavailable"` means models failed to load — parses still work for
-text-layer documents but not scanned ones.
+text-layer documents but not scanned ones. `stt: "unavailable"` means the
+Moonshine models failed to load — `/transcribe` still serves gateway-configured
+requests.
 
 ### `curl` example
 
@@ -98,6 +160,11 @@ curl -s https://<runner-host>/parse \
   -H "X-API-Key: $PARSE_RUNNER_API_KEY" \
   -H "Content-Type: application/json" \
   -d "{\"data\": \"$(base64 -w0 scan.pdf)\", \"filename\": \"scan.pdf\"}"
+
+curl -s https://<runner-host>/transcribe \
+  -H "X-API-Key: $PARSE_RUNNER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"data\": \"$(base64 -w0 note.wav)\", \"filename\": \"note.wav\", \"options\": {\"language\": \"ar\"}}"
 ```
 
 ### n8n example (HTTP Request node)
@@ -120,7 +187,7 @@ WhatsApp/Email trigger). Read `text` off the response; check `source` and
 ### Notes
 
 - **No CORS.** Server-to-server only; a browser must never hold these keys.
-- The caller's VLM `apiKey` is used for that request only, never logged
+- The caller's VLM/STT `apiKey` is used for that request only, never logged
   (redacted), never persisted.
 - The response body is byte-compatible with studygram's `parse-document` edge
   endpoint — a forwarder can pass it through unchanged.
@@ -130,7 +197,9 @@ WhatsApp/Email trigger). Read `text` off the response; check `source` and
 ```bash
 cd apps/runner
 npm install          # then check the repo root has no stray vite_react_shadcn_ts link
-npm run fetch-models # one-time: PP-OCRv4 det+rec into ./models/rapidocr (gitignored)
+npm run fetch-models          # one-time: PP-OCRv4 det+rec into ./models/rapidocr (gitignored)
+npm run fetch-moonshine-models # one-time: Moonshine into ./models/moonshine (binaries gitignored;
+                              # the tokenizer/streaming-config JSONs are committed)
 npm run build
 PARSE_RUNNER_API_KEY=dev-key npm start
 curl localhost:3000/health
@@ -146,8 +215,9 @@ docker run -e PARSE_RUNNER_API_KEY=... -p 3000:3000 liteparse-runner
 ```
 
 The image fetches sha256-pinned models at build (see the `models` stage —
-pins printed by `npm run fetch-models`). `file:../..` is installed as a
-packed tarball, not a symlink, so the runtime tree is self-contained.
+pins printed by `npm run fetch-models` / `npm run fetch-moonshine-models`; the
+Moonshine set is ~199 MB on top of PP-OCR's ~15 MB). `file:../..` is installed
+as a packed tarball, not a symlink, so the runtime tree is self-contained.
 
 ## Environment
 
@@ -156,14 +226,22 @@ packed tarball, not a symlink, so the runtime tree is self-contained.
 | `PARSE_RUNNER_API_KEY` | — | **required**; an open parse endpoint would spend VLM credits |
 | `PORT` | `3000` | |
 | `RAPIDOCR_MODEL_PATH` | `./models/rapidocr` | where the ONNX models live |
-| `RUNNER_MAX_CONCURRENCY` | `2` | in-flight parses; excess → 503 |
-| `RUNNER_MAX_TOTAL_MS` | `110000` | whole-request deadline |
+| `MOONSHINE_MODEL_PATH` | `./models/moonshine` | Moonshine artifacts (set explicitly in the image) |
+| `RUNNER_MAX_CONCURRENCY` | `2` | in-flight requests, `/parse` + `/transcribe` shared; excess → 503 |
+| `RUNNER_MAX_TOTAL_MS` | `110000` | whole-request deadline, `/parse` |
 | `RUNNER_MAX_BYTES` | `20971520` | decoded document cap (20 MB) |
+| `RUNNER_STT_MAX_TOTAL_MS` | `60000` | whole-request deadline, `/transcribe` |
+| `RUNNER_STT_MAX_BYTES` | `26214400` | decoded audio cap (25 MB) |
 
 ## Tests
 
 - `test/app.test.ts` — hermetic HTTP contract (auth, validation, limits, redaction)
+- `test/transcribe.test.ts` — hermetic `/transcribe` HTTP ladder + response key set
+- `test/stt-service.test.ts` — hermetic escalation walk (fake engines, stubbed gateway fetch)
 - `test/options.test.ts` — request→ParseOptions mapping + clamps (pure)
 - `test/ocr-pipeline.test.ts` — **real models**, skipped until `npm run fetch-models`:
   the committed scanned-PDF fixture must come back as `source:"ocr"` with the
   marker text and zero warnings — the parity proof.
+- `test/stt-pipeline.test.ts` — **real models**, skipped until `npm run fetch-moonshine-models`:
+  the escalation walk, the 422 contract, and the exact response key set against
+  genuine Moonshine graphs.

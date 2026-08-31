@@ -3,7 +3,14 @@ import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { SttEngine, SttTranscribeOptions, SttResult } from "../types.js";
 import { MODEL_SAMPLE_RATE, wavToModelAudio } from "../engines/moonshine/shared/audio.js";
-import { WavError } from "../engines/moonshine/shared/wav.js";
+import { parseWavPcm16, WavError } from "../engines/moonshine/shared/wav.js";
+
+// Re-exported so the runner's stt-service can pre-flight the WAV contract and
+// instanceof-check the failure. This subpath bundles its own copy of shared/wav
+// (tsup entry chunks don't share modules), so importing the class from the
+// "liteparse" index instead would yield a DIFFERENT class object and the check
+// would silently always fail — the class must come from the same chunk.
+export { parseWavPcm16, WavError };
 import { loadTokenizer, stripTashkeel, type Tokenizer } from "../engines/moonshine/shared/tokens.js";
 import { greedyPick, tokenConfidence } from "../engines/moonshine/shared/confidence.js";
 import {

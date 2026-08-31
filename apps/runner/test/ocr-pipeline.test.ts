@@ -34,14 +34,17 @@ describe.skipIf(!existsSync(MODELS))("OCR pipeline (real models)", { timeout: 12
 
   it("recognizes the fixture through the full app (POST /parse shape)", async () => {
     const { createApp } = await import("../src/app.js");
+    const { createSttService } = await import("../src/stt-service.js");
     const app = createApp({
       apiKey: "k-test",
       version: "0.0.0-test",
       service: createLiteparseService(),
+      sttService: createSttService({}), // unused on /parse; real wiring, no warm
       maxBytes: 20 * 1024 * 1024,
       maxTotalMs: 110_000,
       maxConcurrency: 2,
       ocrReady: () => true,
+      sttReady: () => false,
       startedAt: Date.now(),
     });
     const data = readFileSync(FIXTURE).toString("base64");

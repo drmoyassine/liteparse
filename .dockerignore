@@ -4,8 +4,11 @@
 **/dist
 **/coverage
 
-# Local model downloads (image fetches its own sha256-pinned copies)
+# Local model downloads (image fetches its own sha256-pinned copies; the
+# committed JSON sidecars under models/moonshine ARE copied into the image)
 apps/runner/models/rapidocr
+apps/runner/models/moonshine/**/*.ort
+apps/runner/models/moonshine/**/*.onnx
 
 # Not part of any build stage
 **/test

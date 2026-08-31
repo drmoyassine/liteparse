@@ -8,13 +8,23 @@ export interface RunnerConfig {
   apiKey: string;
   /** Directory holding the PP-OCRv4 det/rec/dict artifacts (consumed by the OCR engine). */
   rapidocrModelPath: string | undefined;
-  /** Max simultaneous /parse in flight; excess gets 503 + Retry-After. */
+  /**
+   * MOONSHINE_MODEL_PATH passthrough — undefined means the engine probes
+   * (env itself, then ./models/moonshine). Forwarding the env verbatim rather
+   * than defaulting to /app/models/moonshine keeps local dev on the cwd probe;
+   * the Dockerfile sets the env explicitly.
+   */
+  moonshineModelPath: string | undefined;
+  /** Max simultaneous in-flight requests (/parse + /transcribe share this); excess gets 503. */
   maxConcurrency: number;
   /** Hard wall-clock budget per /parse request. */
   maxTotalMs: number;
   /** Max decoded document size. */
   maxBytes: number;
-  /** Extra budget above maxTotalMs for the client round-trip (forwarders abort at 120s). */
+  /** Max decoded audio size for /transcribe. */
+  sttMaxBytes: number;
+  /** Hard wall-clock budget per /transcribe request. */
+  sttMaxTotalMs: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): RunnerConfig {
@@ -29,9 +39,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RunnerConfig {
     port: intEnv(env.PORT, 3000),
     apiKey,
     rapidocrModelPath: env.RAPIDOCR_MODEL_PATH?.trim() || undefined,
+    moonshineModelPath: env.MOONSHINE_MODEL_PATH?.trim() || undefined,
     maxConcurrency: intEnv(env.RUNNER_MAX_CONCURRENCY, 2),
     maxTotalMs: intEnv(env.RUNNER_MAX_TOTAL_MS, 110_000),
     maxBytes: intEnv(env.RUNNER_MAX_BYTES, 20 * 1024 * 1024),
+    sttMaxBytes: intEnv(env.RUNNER_STT_MAX_BYTES, 25 * 1024 * 1024),
+    sttMaxTotalMs: intEnv(env.RUNNER_STT_MAX_TOTAL_MS, 60_000),
   };
 }
 

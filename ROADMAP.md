@@ -176,18 +176,28 @@ export. Mixed AR/EN quality is therefore a property of the model we already run;
   real-mic conditions, and mixed speech are **unmeasured** → that is `stt-lab`'s job.
 
 **v0 — external gateway first (no model, no worker):**
-- [ ] `SttGateway` interface mirroring `VlmGateway` + OpenAI-compatible
+- [x] `SttGateway` interface mirroring `VlmGateway` + OpenAI-compatible
       `/v1/audio/transcriptions` implementation (`gpt-4o-transcribe`; same gateway
       account pattern as the VLM: `parse_vlm_account_id` → `stt_account_id`).
-- [ ] Graceful "gateway absent" → user types. (Web Speech API dictation: **dropped** —
+      *(Shipped 2026-09-01, Phase A: `src/stt/gateway.server.ts` via `liteparse/stt/server`;
+      `parseDocument()` accepts audio as a first-class kind, `sniff` detects WAV/MP3/Ogg/
+      FLAC/M4A, the route degrades to best-effort text when no gateway is wired.)*
+- [x] Graceful "gateway absent" → user types. (Web Speech API dictation: **dropped** —
       vendor-cloud, single `lang` tag per session, no code-switching, no Firefox.
       Superseded by v1 local streaming, which does the job locally in both languages.)
 
 **v0.5 — runner `/transcribe`:**
-- [ ] `POST /transcribe` on `apps/runner` (same container/auth/model-pinning pattern):
+- [x] `POST /transcribe` on `apps/runner` (same container/auth/model-pinning pattern):
       slot 1 = streaming-tiny EN `.ort` + batch tiny-ar int8 (parity with browser),
       slot 2 = base EN, then pass-through escalation to the caller's `SttGateway`.
       Arabic audio stays in our infra; kills per-call API cost on the happy path.
+      *(Shipped 2026-09-01, Phases B.1–B.3: shared-core + `moonshine-server` engine via
+      `liteparse/stt/moonshine-server`; runner `stt-service.ts` walk (WAV pre-flight →
+      slot1 → en:slot2 → gateway → best-effort), `/transcribe` sharing `/parse`'s
+      semaphore + auth, `stt:ready` health flag, sha256-pinned models in the Dockerfile
+      (~199 MB), tokenizer/config sidecars committed. Live-verified: EN sine walks both
+      slots → best-effort with honest warnings; AR sine resolves at slot 1 conf 0.869 —
+      the hallucination-on-silence case `stt-lab` must flag.)*
 
 **v1 — browser local (WASM, no WebGPU dependency):**
 - [ ] Streaming decode in the existing Web Worker primitives (ModelOrigin **script-keyed**
@@ -220,6 +230,14 @@ studygram-app):**
 | 10s note, runner slot 2 (base) | ~1–3s e2e | 1.6× tiny FLOPs |
 | 10s note, external | ~2–5s typical, p95 higher | upload-bandwidth-bound + 1–3s inference; community-reported tail instability |
 | Full escalation (local→runner→external) | ~4–10s | why the confidence gate must escalate *rarely* |
+
+**Measured on the dev box (2026-09-01, live `/transcribe`, warm slot 1):** EN
+streaming 1.2 s clip → **1.0 s** decode (RTF ≈ 0.85, immediate EOS on sine); EN
+full walk (slot 1 empty → base-en load 2.3 s + decode 2.5 s) → 2.5 s e2e; AR batch
+1.0 s clip → 5.2 s first call (1.9 s load + 194-token no-EOS worst case ≈ 3.4×
+real-time), i.e. the estimates above hold for EN and are optimistic for AR's
+degenerate loop — `stt-lab` clips replace sine with speech (EOS arrives in
+tens of tokens).
 
 **Dependencies / blockers:** none architectural — the 2026-09-01 spike resolved the
 `.ort` loadability question in **both** runtimes (all green) and the base-EN license

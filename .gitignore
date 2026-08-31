@@ -10,6 +10,13 @@ coverage/
 # (the dict IS committed — apps/runner/models/ppocr-en-dict.txt)
 apps/runner/models/rapidocr/
 
+# Moonshine artifacts fetched by apps/runner/scripts/fetch-moonshine-models.mjs.
+# Only the binaries are ignored — the tokenizer/streaming-config JSONs ARE
+# committed (same pin-the-mutable-text policy as the OCR dict: HF resolve URLs
+# can silently update a tokenizer and garbage every transcript).
+apps/runner/models/moonshine/**/*.ort
+apps/runner/models/moonshine/**/*.onnx
+
 # Track 3 spike artifacts (apps/runner/scripts/spike-moonshine.mjs) — findings
 # land in ROADMAP.md, the files never leave the dev machine
 apps/runner/.spike-moonshine/
