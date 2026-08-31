@@ -25,10 +25,13 @@ Two rules hold the whole plan together. Every track below is shaped by them.
    OpenAI-compatible call**, exactly as today (the agent text LLM and VLM are already
    external). So "TS-everywhere" ≠ "no LLM in the stack" — it means LLMs stay a
    one-hop external call. Whisper lands on the self-host side; the LLM stays external.
+   *(STT model updated 2026-09-01: the self-host STT family is Moonshine EN/AR, not
+   Whisper — see Track 3.)*
 
-**Honest ceiling this accepts:** Whisper via `onnxruntime-node` is good, not best (no
-`faster-whisper`). Fine for voice-note clips; bulk long-form would use the external
-STT fallback. OCR is first-class on every tier.
+**Honest ceiling this accepts:** *(STT half superseded 2026-09-01 — the self-host STT
+family is now Moonshine, not Whisper; see Track 3.)* Whisper via `onnxruntime-node` is
+good, not best (no `faster-whisper`). Fine for voice-note clips; bulk long-form would
+use the external STT fallback. OCR is first-class on every tier.
 
 ---
 
@@ -88,40 +91,107 @@ parity with the Latin baseline (calibrated), no VLM on the happy path.
 
 ---
 
-### Track 3 — litecomposer (speech)
+### Track 3 — litecomposer (speech) · **REVISED 2026-09-01**
 
 **Why:** turns liteparse from doc→text into media→text. The architecture (worker,
-ModelOrigin, IndexedDB cache, router) maps directly onto audio. **Phased** — ship the
-cheap half now, the local-model half later.
+ModelOrigin, IndexedDB cache, router) maps directly onto audio.
 
-**v0 — ships now (no model, no WebGPU):**
-- [ ] Web Speech API **live dictation** (mic button → text streams into composer with
-      interim results). Note: Web Speech API is **vendor-cloud**, not a local model —
-      closer to an external API call than to RapidOCR. Live-mic only, not file/blob.
-      Firefox support absent. Treat as an *input method beside the pipeline*, not a
-      stage inside it.
-- [ ] **External OpenAI-compatible STT fallback** for files (`/v1/audio/transcriptions`).
-      Route through the **same gateway pattern** as the VLM fallback
-      (`app_settings.parse_vlm_account_id` → add `stt_account_id`). One external-model
-      gateway abstraction, not a second parallel path.
-- [ ] Graceful "mic/API not supported" → user types.
+**The revision, in one paragraph:** the old plan (Web Speech dictation now, in-browser
+Whisper v1 blocked on WebGPU) is superseded. The WebGPU blocker was stale (real-time
+browser Whisper on WebGPU has existed since 2024), but more decisively: the **Moonshine
+family** ([moonshine-ai](https://huggingface.co/moonshine-ai)) fits both hard product
+constraints — **latency** and **Arabic/English** — better than Whisper at every tier:
 
-**v1 — ultimate vision (local in-browser Whisper):**
-- [ ] **BLOCKED on the WebGPU compute backend existing** (see Cross-cutting: WebGPU is
-      its own line, NOT folded into Track 1's int8 work). WASM Whisper is
-      slower-than-real-time past tiny; WebGPU is the gate.
-- [ ] Whisper in a Web Worker via the existing primitives (ModelOrigin, cache, singleton).
-      Use `onnxruntime-web` WebGPU EP on the whisper.onnx model.
-- [ ] **STT confidence gate** mirroring the OCR one — Whisper gives per-segment
-      probabilities; gate on them. Build `stt-lab` calibration harness (analog of
-      `ocr-lab`) to set "good enough vs fall back to external STT" thresholds.
-- [ ] Engine dispose/evict: a Whisper session + OCR session in one tab is heavy —
-      LRU evict or explicit dispose (the deferred engine-lifecycle work, repurposed).
+- **Per-language models at edge sizes.** `moonshine-streaming-tiny-ar` (27M, MIT):
+  CV-Arabic 17.9 / FLEURS-Arabic 12.6 WER — ≈ Whisper-medium (769M) territory at
+  1/28th the params. Whisper-tiny is *unusable* on Arabic (WER 66–89); browser-sized
+  Whisper was never going to carry Arabic.
+- **CPU-first streaming architecture.** Streaming encoder (~80ms lookahead, 50Hz
+  causal frontend) + no Whisper-style 30s zero-padding — compute scales with actual
+  audio length (≈5× less compute on a 10s clip than same-size Whisper). Designed for
+  0.1–1 TOPS / <1GB → **v1 local tier needs no WebGPU**: plain WASM covers Firefox,
+  Safari, old Android. No capability cliff.
+- **MIT streaming models for both EN and AR** → the same-models-every-tier rule holds.
 
-**Dependencies / blockers:** v1 blocked on WebGPU. Both phases benefit from Track 1
-(Whisper at fp is too heavy; int8 makes it browser-viable).
-**Done when:** v0 — dictation works + file STT via gateway with fallback; v1 — local
-Whisper passes the `stt-lab` gate at parity with external STT on a voice-note corpus.
+**The cascade (mirrors the OCR one):**
+
+| Tier | Models | Role |
+|---|---|---|
+| Browser (WASM worker) | `moonshine-streaming-tiny` EN + `-ar` | live dictation + clips, both langs |
+| `apps/runner` slot 1 | same two streaming models | browser parity for server-originated audio |
+| `apps/runner` slot 2 | `moonshine-base` ONNX EN; `moonshine-base-ar` ⚠ | strictly-stronger escalation |
+| External gateway | `gpt-4o-transcribe` via `SttGateway` | quality ceiling, confidence-gated |
+
+**Code-switching caveat:** streaming-AR inherits code-switching handling only via
+distillation (training corpus is Arabic-only); batch `moonshine-tiny-ar` (27M) is the
+variant trained *with* code-switching. Browser adds it for the notes path **iff**
+`stt-lab` shows streaming-ar garbles mixed AR/EN — one extra ~30MB int8 model.
+
+**Artifact status (verified 2026-09-01):**
+- ONNX: ✅ `onnx-community` exports for tiny EN/AR + base EN; ✅ sherpa-onnx int8 EN
+  tiny/base; ✅ QDQ int8 AR tiny. ⚠ streaming family ships official **`.ort`** packages
+  (int8 = +0.30 WER vs fp) — confirm onnxruntime-web/node load `.ort`, else export
+  classic ONNX. ❌ **base-ar has no ONNX export** — we export it ourselves (or the AR
+  escalation slot goes straight to external until we do).
+- Licenses: streaming EN/AR = **MIT** ✅ · `tiny-ar`/`base-ar` = **"other"/unverified** ⚠
+  — resolve before baking into the Docker image.
+- Arabic quality: card benchmarks only (MSA-heavy corpora). Dialect (Gulf first),
+  real-mic conditions, and mixed speech are **unmeasured** → that is `stt-lab`'s job.
+
+**v0 — external gateway first (no model, no worker):**
+- [ ] `SttGateway` interface mirroring `VlmGateway` + OpenAI-compatible
+      `/v1/audio/transcriptions` implementation (`gpt-4o-transcribe`; same gateway
+      account pattern as the VLM: `parse_vlm_account_id` → `stt_account_id`).
+- [ ] Graceful "gateway absent" → user types. (Web Speech API dictation: **dropped** —
+      vendor-cloud, single `lang` tag per session, no code-switching, no Firefox.
+      Superseded by v1 local streaming, which does the job locally in both languages.)
+
+**v0.5 — runner `/transcribe`:**
+- [ ] `POST /transcribe` on `apps/runner` (same container/auth/model-pinning pattern):
+      slot 1 = streaming-tiny EN/AR (parity with browser), slot 2 = base EN, then
+      pass-through escalation to the caller's `SttGateway`. Arabic audio stays in our
+      infra; kills per-call API cost on the happy path.
+
+**v1 — browser local (WASM, no WebGPU dependency):**
+- [ ] Streaming decode in the existing Web Worker primitives (ModelOrigin **script-keyed**
+      — shares Track 2's plumbing — IndexedDB cache, warm singleton).
+- [ ] **STT confidence gate**: decoder per-token logprobs (autoregressive decode) →
+      length-weighted mean, mirroring `quality.ts`. Thresholds calibrated per
+      **model × language** in `stt-lab` — do not reuse OCR floors.
+- [ ] Engine dispose/LRU (the deferred lifecycle work): two streaming models + an OCR
+      session in one tab is the pressure case.
+- [ ] Diacritics policy decided once, in the engine (default: strip tashkeel; opt-in
+      flag to keep) — validate against stt-lab output quality first.
+
+**`stt-lab` — build with v0, gate v1 (the `ocr-lab` analog; lives beside it in
+studygram-app):**
+- [ ] Seed corpus: ~10 Arabic clips (MSA **and** Gulf dialect), ~5 mixed AR/EN, ~5 EN.
+- [ ] Run streaming-tiny EN/AR + batch tiny-ar + base + `gpt-4o-transcribe`; record
+      quality (human-scored WER), TTFT, clip real-time factor, hallucination-on-silence
+      rate, and diacritics behavior.
+- [ ] Decides: the code-switching add, the AR escalation slot (base-ar vs
+      straight-to-external), confidence floors per model×language.
+
+**Latency budget (estimates; `stt-lab` replaces them with measurements):**
+
+| Path | Estimate | Basis |
+|---|---|---|
+| Browser cold start (2 models, int8) | ~55–60MB download + 1–3s session init; warm ~0.5–2s | artifact sizes; preload on mic-intent |
+| Live TTFT, local streaming | **~0.3–0.6s** (no network) | 200ms frontend buffer + 80ms lookahead + decode step; vendor C++ claims <200ms |
+| 10s note, browser WASM | ~1–4s | ≈5× less compute than whisper-tiny (no 30s padding); whisper-tiny WASM ≈ real-time |
+| 10s note, runner slot 1 | ~0.5–2s e2e | upload (opus ~100KB) + native-CPU inference (~2–4× WASM) |
+| 10s note, runner slot 2 (base) | ~1–3s e2e | 1.6× tiny FLOPs |
+| 10s note, external | ~2–5s typical, p95 higher | upload-bandwidth-bound + 1–3s inference; community-reported tail instability |
+| Full escalation (local→runner→external) | ~4–10s | why the confidence gate must escalate *rarely* |
+
+**Dependencies / blockers:** none architectural — the remaining gates are the ⚠/❌ items
+above (`.ort` loading, base-ar ONNX + licenses) and `stt-lab`'s dialect verdict.
+Track 1 (int8) is mostly free here — Moonshine already ships int8 artifacts; the
++0.30-WER int8 cost just needs recalibration in the floors.
+**Done when:** v0 — file STT via gateway with graceful degradation; v0.5 — runner serves
+`/transcribe` at parity with the browser path; v1 — local streaming passes the
+`stt-lab` gate at parity with external STT on the seed corpus, both languages, no
+WebGPU requirement.
 
 ---
 
@@ -181,9 +251,11 @@ to Runpod and serves an async extract job end-to-end; OpenAPI doc is generated a
 ## Cross-cutting concerns
 
 - **WebGPU is its own line.** int8 (model precision) and WebGPU (execution provider) are
-  **orthogonal** — they compose but are separate projects. Track 3 v1 (local Whisper) is
-  blocked until the WebGPU backend exists. Do NOT let WebGPU get silently absorbed into
-  "int8 work" or Track 3 hits an unstated prerequisite.
+  **orthogonal** — they compose but are separate projects. *(Updated 2026-09-01: Track 3
+  v1 no longer depends on WebGPU — Moonshine's local tier is WASM-first. WebGPU remains
+  its own line for the Granite-Docling browser tier and as optional STT acceleration.)*
+  Do NOT let WebGPU get silently absorbed into "int8 work" or another track hits an
+  unstated prerequisite.
 - **Telemetry on fallback rates.** Track 2 (VLM fallback by script), Track 3 (external
   STT vs local), Track 4 (tier routing decisions). You can't tune thresholds or justify
   adding models without this. Silent degradation is the failure mode.
@@ -193,7 +265,7 @@ to Runpod and serves an async extract job end-to-end; OpenAPI doc is generated a
 - **Carry-over from the router's P5 deferrals** (still-open loose ends — fold in or close):
   - edge HTTP dispatch for `location:"edge"` strategies → **folds into Track 4.**
   - forward `strategy.script` to the OCR engine → **folds into Track 2** (per-script rec).
-  - engine `dispose()` lifecycle → **repurposed** for Track 3 v1 (Whisper session evict).
+  - engine `dispose()` lifecycle → **repurposed** for Track 3 v1 (STT session evict).
   - streaming page render (don't buffer all page images) → still valid, low priority.
   - worker-shell end-to-end integration test → still valid, nice-to-have.
   - confidence-gated cascade descent (low-confidence → Docling) → **CLOSED** (Docling retired).
