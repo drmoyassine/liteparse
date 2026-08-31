@@ -199,16 +199,39 @@ export. Mixed AR/EN quality is therefore a property of the model we already run;
       slots → best-effort with honest warnings; AR sine resolves at slot 1 conf 0.869 —
       the hallucination-on-silence case `stt-lab` must flag.)*
 
-**v1 — browser local (WASM, no WebGPU dependency):**
-- [ ] Streaming decode in the existing Web Worker primitives (ModelOrigin **script-keyed**
-      — shares Track 2's plumbing — IndexedDB cache, warm singleton).
-- [ ] **STT confidence gate**: decoder per-token logprobs (autoregressive decode) →
-      length-weighted mean, mirroring `quality.ts`. Thresholds calibrated per
-      **model × language** in `stt-lab` — do not reuse OCR floors.
-- [ ] Engine dispose/LRU (the deferred lifecycle work): two streaming models + an OCR
-      session in one tab is the pressure case.
-- [ ] Diacritics policy decided once, in the engine (default: strip tashkeel; opt-in
-      flag to keep) — validate against stt-lab output quality first.
+**v1a — browser local, clips (WASM, no WebGPU dependency):**
+- [x] Local decode in the existing model plumbing (ModelOrigin → IndexedDB read-through,
+      warm singleton) — the batch/streaming decode loops extracted to
+      `engines/moonshine/shared/decode.ts` so browser (`onnxruntime-web/wasm`) and runner
+      (`onnxruntime-node`) run the IDENTICAL loop (the batch encoder-KV cache-branch fix
+      lives once, for both). *(Shipped 2026-09-01, Phase C: `liteparse/engines/moonshine` +
+      `setBrowserSttEngine(createMoonshineSttEngine({ modelOrigin: createMoonshineModelOrigin() }))`;
+      binaries from HF `/resolve/`, tokenizer/streaming-config JSONs served same-origin
+      (dict precedent — decode tables must not mutate under a cached binary); non-WAV
+      clips decode in-engine via `AudioContext.decodeAudioData`, so webm/opus/mp3 work
+      browser-side without the runner's WAV-only 422.)*
+- [x] **STT confidence gate**: decoder per-token logprobs (autoregressive decode) →
+      length-weighted geometric mean (`shared/confidence.ts`, floor 0.55 — NOT OCR's
+      0.85; different measurement, different scale). Engine-side in the browser
+      (`text non-empty && conf < floor` → `{text:""}` → route under-yield → external
+      gateway leg); service-side in the runner (its stronger legs are local).
+      Thresholds calibrated per **model × language** in `stt-lab` —
+      `MODEL_STT_CONFIDENCE_FLOORS` is the seam. *(Shipped 2026-09-01, Phases B.2/C.)*
+- [x] Engine dispose/LRU (the deferred lifecycle work): `maxLoadedModels` (default 2 =
+      EN streaming + AR batch ≈ 139 MB) with least-recently-used disposal; inflight
+      loads deduped. *(Shipped 2026-09-01, Phase C.)*
+- [x] Diacritics policy decided once, in the engine (default: strip tashkeel;
+      `keepDiacritics` to keep) — `shared/tokens.ts`; stt-lab validates output quality
+      against it. *(Shipped 2026-09-01, Phase B.2.)*
+- [x] stt-lab debug line (repo-side deliverable): one flat record per transcribe —
+      model, lang, audio_s, decode_s, rtf, tokens, mean/min token prob, top-5 worst
+      tokens, silence-hallucination + repetition-loop flags, diacritics stripped/kept
+      (`shared/stats.ts` `sttDebugLine`; debug-gated like OCR telemetry).
+      *(Shipped 2026-09-01, Phases B.2/C.)*
+
+**v1b — browser local, live dictation (streaming):** see the D1/D2 split — VAD-chunked
+batch always feasible; true incremental decode if the streaming state tensors carry
+(which the spike confirmed: frontend/decoder expose state outputs).
 
 **`stt-lab` — build with v0, gate v1 (the `ocr-lab` analog; lives beside it in
 studygram-app):**

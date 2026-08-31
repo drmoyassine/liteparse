@@ -1,12 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseDocument } from "../src/pipeline.js";
+import { setBrowserSttEngine } from "../src/runtime.js";
 import type { SttEngine, SttGateway } from "../src/types.js";
 
 /**
- * parseDocument on AUDIO documents (Track 3 v0): classify (sniff → "audio") →
+ * parseDocument on AUDIO documents (Track 3): classify (sniff → "audio") →
  * route (moonshine? → stt-gateway) → execute (the clip bytes are the single
  * "page"). Mirrors pipeline.test.ts's route-actually-taken style with injected
- * fakes — no network, no models.
+ * fakes — no network, no models. The registered-engine block covers the
+ * setBrowserSttEngine path (Phase C): registration alone wires the local leg.
  */
 
 // RIFF<size>WAVE — the smallest header sniff needs to call this a WAV.
@@ -122,5 +124,30 @@ describe("parseDocument — audio cascade (local engine → external gateway)", 
     expect(doc.text).toBe("");
     expect(doc.source).toBe("none");
     expect(doc.warnings.some((w) => w.includes("stt-gateway"))).toBe(true);
+  });
+});
+
+describe("parseDocument — registered browser engine (setBrowserSttEngine)", () => {
+  afterEach(() => {
+    setBrowserSttEngine(null); // never leak a registration into other files
+  });
+
+  it("uses the REGISTERED engine without any per-call option", async () => {
+    const registered = fakeSttEngine("registered engine transcript");
+    setBrowserSttEngine(registered);
+    const doc = await parseDocument(WAV, { filename: "note.wav" });
+    expect(doc.text).toBe("registered engine transcript");
+    expect(doc.source).toBe("stt");
+    expect(registered.transcribe).toHaveBeenCalledOnce();
+  });
+
+  it("per-call sttEngine still wins over the registration", async () => {
+    const registered = fakeSttEngine("unused registered transcript");
+    const injected = fakeSttEngine("injected engine transcript");
+    setBrowserSttEngine(registered);
+    const doc = await parseDocument(WAV, { sttEngine: injected, filename: "note.wav" });
+    expect(doc.text).toBe("injected engine transcript");
+    expect(injected.transcribe).toHaveBeenCalledOnce();
+    expect(registered.transcribe).not.toHaveBeenCalled();
   });
 });

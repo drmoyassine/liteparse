@@ -127,6 +127,20 @@ export const ESCALATION_STT_MODEL: Record<SttLanguage, MoonshineModelId | null> 
   ar: null, // AR escalates straight to the external gateway (ROADMAP Track 3)
 };
 
+/**
+ * Slot-1 model for a language, unless the caller forced a KNOWN model id (an
+ * unknown forced string falls back to the default — the server engine does the
+ * same for its per-slot construction). Shared by both engines so browser and
+ * runner pick identical slot-1 models.
+ */
+export function resolveModelId(
+  forced: string | undefined,
+  language: SttLanguage,
+): MoonshineModelId {
+  if (forced && MOONSHINE_MODELS[forced]) return forced as MoonshineModelId;
+  return DEFAULT_STT_MODEL[language];
+}
+
 export const HF_RESOLVE_BASE = "https://huggingface.co";
 
 /** Download URL for one file of a descriptor (fetch script + browser origin). */

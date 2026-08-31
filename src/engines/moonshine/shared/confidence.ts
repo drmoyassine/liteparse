@@ -25,7 +25,7 @@ export function sttFloorFor(modelId: string): number {
 }
 
 /** Stable log(Σ e^x) over a logits row. */
-export function logSumExp(logits: Float32Array | number[]): number {
+export function logSumExp(logits: ArrayLike<number>): number {
   let max = -Infinity;
   for (let i = 0; i < logits.length; i++) if (logits[i]! > max) max = logits[i]!;
   if (max === -Infinity) return -Infinity;
@@ -35,7 +35,7 @@ export function logSumExp(logits: Float32Array | number[]): number {
 }
 
 /** One greedy decode step: argmax id + its softmax probability (as log-prob). */
-export function greedyPick(logits: Float32Array | number[]): { id: number; logProb: number } {
+export function greedyPick(logits: ArrayLike<number>): { id: number; logProb: number } {
   let id = 0;
   for (let i = 1; i < logits.length; i++) if (logits[i]! > logits[id]!) id = i;
   return { id, logProb: logits[id]! - logSumExp(logits) };

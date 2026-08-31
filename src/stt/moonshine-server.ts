@@ -12,15 +12,22 @@ import { parseWavPcm16, WavError } from "../engines/moonshine/shared/wav.js";
 // would silently always fail — the class must come from the same chunk.
 export { parseWavPcm16, WavError };
 import { loadTokenizer, stripTashkeel, type Tokenizer } from "../engines/moonshine/shared/tokens.js";
-import { greedyPick, tokenConfidence } from "../engines/moonshine/shared/confidence.js";
+import { tokenConfidence } from "../engines/moonshine/shared/confidence.js";
 import {
-  DEFAULT_STT_MODEL,
   MOONSHINE_MODELS,
+  resolveModelId,
   type MoonshineModelDescriptor,
   type MoonshineModelId,
   type SttLanguage,
   type StreamingConfig,
 } from "../engines/moonshine/shared/models.js";
+import {
+  decodeBatch,
+  decodeStreaming,
+  type BatchDecodeModel,
+  type StreamingDecodeModel,
+  type TensorFactory,
+} from "../engines/moonshine/shared/decode.js";
 
 /**
  * Node STT engine running the Moonshine cascade's local slots via
@@ -70,27 +77,12 @@ type OrtModule = any;
 /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
 type OrtSession = any;
 
-interface StreamingModel {
-  kind: "streaming";
-  desc: MoonshineModelDescriptor;
+interface StreamingModel extends StreamingDecodeModel {
   tokenizer: Tokenizer;
-  cfg: StreamingConfig;
-  /** The ort module the sessions came from (Tensor class for the decode loop). */
-  ort: OrtModule;
-  frontend: OrtSession;
-  encoder: OrtSession;
-  adapter: OrtSession;
-  crossKv: OrtSession;
-  decoderKv: OrtSession;
 }
 
-interface BatchModel {
-  kind: "batch";
-  desc: MoonshineModelDescriptor;
+interface BatchModel extends BatchDecodeModel {
   tokenizer: Tokenizer;
-  ort: OrtModule;
-  encoder: OrtSession;
-  decoder: OrtSession;
 }
 
 type LoadedModel = StreamingModel | BatchModel;
@@ -201,137 +193,11 @@ function createEngine(server: MoonshineServer, opts: MoonshineServerOptions): Mo
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Decode loops (greedy; per-step logits → logprob → confidence)
+// Model loading (the decode loops themselves live in shared/decode.ts — one
+// source for both runtimes, so a graph quirk like the batch export's broken
+// cache-branch encoder-KV presents is fixed once, not ported)
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface DecodeOutcome {
-  ids: number[];
-  logProbs: number[];
-}
-
-async function decodeStreaming(
-  m: StreamingModel,
-  samples: Float32Array,
-  signal?: AbortSignal,
-): Promise<DecodeOutcome> {
-  const ids: number[] = [];
-  const logProbs: number[] = [];
-  // The frontend needs at least one 80-sample frame to emit features.
-  if (samples.length < 80) return { ids, logProbs };
-
-  const t = tensorFactory(m);
-  const st = m.cfg.frontend_state_shapes;
-  const f = await m.frontend.run({
-    audio_chunk: t("float32", samples, [1, samples.length]),
-    sample_buffer: t("float32", new Float32Array(prod(st.sample_buffer)), st.sample_buffer),
-    sample_len: t("int64", new BigInt64Array(1), st.sample_len),
-    conv1_buffer: t("float32", new Float32Array(prod(st.conv1_buffer)), st.conv1_buffer),
-    conv2_buffer: t("float32", new Float32Array(prod(st.conv2_buffer)), st.conv2_buffer),
-    frame_count: t("int64", new BigInt64Array(1), st.frame_count),
-  });
-  const enc = await m.encoder.run({ features: f.features });
-  // One-shot whole clip → position offset 0 (chunk threading is the Phase D story).
-  const mem = await m.adapter.run({
-    encoded: enc.encoded,
-    pos_offset: t("int64", BigInt64Array.of(0n), [1]),
-  });
-  const cross = await m.crossKv.run({ memory: mem.memory });
-
-  // Empty self-KV [depth,1,heads,0,headDim] grows by one token per step (probed).
-  const kvDims = [m.cfg.depth, 1, m.cfg.nheads, 0, m.cfg.head_dim];
-  let kSelf = t("float32", new Float32Array(0), kvDims);
-  let vSelf = t("float32", new Float32Array(0), kvDims);
-  let token = t("int64", BigInt64Array.of(BigInt(m.desc.bosId)), [1, 1]);
-
-  for (let step = 0; step < m.desc.maxTokens; step++) {
-    if (signal?.aborted) throw new Error("aborted");
-    const out = await m.decoderKv.run({
-      token,
-      k_self: kSelf,
-      v_self: vSelf,
-      out_k_cross: cross.k_cross,
-      out_v_cross: cross.v_cross,
-    });
-    const pick = greedyPick(out.logits.data);
-    if (pick.id === m.desc.eosId) break;
-    ids.push(pick.id);
-    logProbs.push(pick.logProb);
-    token = t("int64", BigInt64Array.of(BigInt(pick.id)), [1, 1]);
-    kSelf = out.out_k_self;
-    vSelf = out.out_v_self;
-  }
-  return { ids, logProbs };
-}
-
-/** Batch merged-decoder KV kinds × layers, e.g. past_key_values.0.decoder.key. */
-const BATCH_KV_KINDS = ["decoder.key", "decoder.value", "encoder.key", "encoder.value"] as const;
-
-async function decodeBatch(
-  m: BatchModel,
-  samples: Float32Array,
-  signal?: AbortSignal,
-): Promise<DecodeOutcome> {
-  const ids: number[] = [];
-  const logProbs: number[] = [];
-  if (samples.length < 80) return { ids, logProbs };
-
-  const t = tensorFactory(m);
-  const enc = await m.encoder.run({
-    input_values: t("float32", samples, [1, samples.length]),
-  });
-  const hidden = enc.last_hidden_state;
-  const g = m.desc.batch!;
-
-  // Empty past [1,heads,0,headDim] (transformers.js layout, probed); the merged
-  // graph's use_cache_branch=0 step consumes them and returns present.*.
-  const past: Record<string, unknown> = {};
-  for (let l = 0; l < g.depth; l++) {
-    for (const kind of BATCH_KV_KINDS) {
-      past[`past_key_values.${l}.${kind}`] = t("float32", new Float32Array(0), [
-        1,
-        g.heads,
-        0,
-        g.headDim,
-      ]);
-    }
-  }
-
-  for (let step = 0; step < m.desc.maxTokens; step++) {
-    if (signal?.aborted) throw new Error("aborted");
-    const out = await m.decoder.run({
-      input_ids: t("int64", BigInt64Array.of(BigInt(step === 0 ? m.desc.bosId : ids[step - 1]!)), [1, 1]),
-      encoder_hidden_states: hidden,
-      use_cache_branch: t("bool", new Uint8Array([step === 0 ? 0 : 1]), [1]),
-      ...past,
-    });
-    const pick = greedyPick(out.logits.data);
-    if (pick.id === m.desc.eosId) break;
-    ids.push(pick.id);
-    logProbs.push(pick.logProb);
-    for (let l = 0; l < g.depth; l++) {
-      for (const kind of BATCH_KV_KINDS) {
-        // The merged export's cache branch (use_cache_branch=1) emits BROKEN
-        // encoder-KV presents — [0,8,1,36] with dim 0 zeroed (probed 2026-09-01
-        // against moonshine-tiny-ar-ONNX; feeding one back fails encoder_attn's
-        // MatMul at step 3). That branch recomputes cross-KV from
-        // encoder_hidden_states each step, so the encoder past stays EMPTY —
-        // thread ONLY the decoder self-KV, never the encoder presents.
-        if (kind.startsWith("encoder.")) continue;
-        past[`past_key_values.${l}.${kind}`] = out[`present.${l}.${kind}`];
-      }
-    }
-  }
-  return { ids, logProbs };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Model loading
-// ─────────────────────────────────────────────────────────────────────────────
-
-function resolveModelId(forced: MoonshineServerOptions["model"], language: SttLanguage): string {
-  if (forced && MOONSHINE_MODELS[forced]) return forced;
-  return DEFAULT_STT_MODEL[language];
-}
 
 async function ensureModel(server: MoonshineServer, id: string): Promise<LoadedModel> {
   const cached = server.models.get(id);
@@ -370,6 +236,7 @@ async function loadModel(server: MoonshineServer, desc: MoonshineModelDescriptor
 
   const tokenizer = loadTokenizer(JSON.parse(readFileSync(paths.tokenizer!, "utf-8")));
   const create = (p: string) => server.ort.InferenceSession.create(p, { executionProviders: ["cpu"] });
+  const tensor = makeTensorFactory(server.ort);
 
   if (desc.variant === "streaming") {
     const cfg = JSON.parse(readFileSync(paths.streamingConfig!, "utf-8")) as StreamingConfig;
@@ -383,28 +250,25 @@ async function loadModel(server: MoonshineServer, desc: MoonshineModelDescriptor
       create(paths.crossKv!),
       create(paths.decoderKv!),
     ]);
-    const model: StreamingModel = { kind: "streaming", desc, tokenizer, cfg, ort: server.ort, frontend, encoder, adapter, crossKv, decoderKv };
+    const model: StreamingModel = { kind: "streaming", desc, tokenizer, cfg, tensor, frontend, encoder, adapter, crossKv, decoderKv };
     dbg(`[moonshine-server] loaded ${desc.id} (${((performance.now() - tInit) / 1000).toFixed(1)}s, ${dir})`);
     return model;
   }
 
   const [encoder, decoder] = await Promise.all([create(paths.encoder!), create(paths.decoder!)]);
-  const model: BatchModel = { kind: "batch", desc, tokenizer, ort: server.ort, encoder, decoder };
+  const model: BatchModel = { kind: "batch", desc, tokenizer, tensor, encoder, decoder };
   dbg(`[moonshine-server] loaded ${desc.id} (${((performance.now() - tInit) / 1000).toFixed(1)}s, ${dir})`);
   return model;
 }
 
 function releaseModel(model: LoadedModel): void {
-  if (model.kind === "streaming") {
-    void model.frontend?.release();
-    void model.encoder?.release();
-    void model.adapter?.release();
-    void model.crossKv?.release();
-    void model.decoderKv?.release();
-  } else {
-    void model.encoder?.release();
-    void model.decoder?.release();
-  }
+  // Sessions satisfy the runtime's release(); the decode contract types only
+  // what the loops need (run), so reach the host method through a cast.
+  const sessions: OrtSession[] =
+    model.kind === "streaming"
+      ? [model.frontend, model.encoder, model.adapter, model.crossKv, model.decoderKv]
+      : [model.encoder, model.decoder];
+  for (const s of sessions) void s?.release?.();
 }
 
 async function loadServer(explicitPath?: string): Promise<MoonshineServer> {
@@ -448,13 +312,9 @@ async function detectModelPath(explicitPath?: string): Promise<string | null> {
 
 // ─── small helpers ───────────────────────────────────────────────────────────
 
-/** Zero-length/zero-filled tensor factory bound to the model's ort module. */
-function tensorFactory(m: LoadedModel) {
-  const OrtTensor = m.ort.Tensor;
+/** Zero-length/zero-filled tensor factory bound to the ort module (shared/decode contract). */
+function makeTensorFactory(ort: OrtModule): TensorFactory {
+  const OrtTensor = ort.Tensor;
   if (!OrtTensor) throw new Error("ort.Tensor unavailable");
   return (type: string, data: unknown, dims: number[]) => new OrtTensor(type, data, dims);
-}
-
-function prod(dims: number[]): number {
-  return dims.reduce((a, b) => a * b, 1);
 }

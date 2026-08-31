@@ -16,7 +16,8 @@ import { defineConfig } from "tsup";
 export default defineConfig({
   // `index` is the isomorphic core; `raster/sharp` is an opt-in Node subpath that
   // pulls native deps (sharp + @napi-rs/canvas) and is never imported by the core.
-  // `engines/rapidocr` is the opt-in browser RapidOCR engine (onnxruntime-web + PP-OCRv4).
+  // `engines/rapidocr` is the opt-in browser RapidOCR engine (onnxruntime-web + PP-OCRv4);
+  // `engines/moonshine` is its STT counterpart (onnxruntime-web + Moonshine EN/AR).
   entry: {
     index: "src/index.ts",
     "raster/sharp": "src/raster/sharp.ts",
@@ -25,6 +26,7 @@ export default defineConfig({
     "stt/server": "src/stt/gateway.server.ts",
     "stt/moonshine-server": "src/stt/moonshine-server.ts",
     "engines/rapidocr": "src/engines/rapidocr/index.ts",
+    "engines/moonshine": "src/engines/moonshine/index.ts",
   },
   format: ["esm", "cjs"],
   dts: true,

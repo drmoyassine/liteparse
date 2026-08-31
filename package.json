@@ -66,6 +66,11 @@
       "types": "./dist/engines/rapidocr.d.ts",
       "import": "./dist/engines/rapidocr.js",
       "require": "./dist/engines/rapidocr.cjs"
+    },
+    "./engines/moonshine": {
+      "types": "./dist/engines/moonshine.d.ts",
+      "import": "./dist/engines/moonshine.js",
+      "require": "./dist/engines/moonshine.cjs"
     }
   },
   "main": "./dist/index.cjs",

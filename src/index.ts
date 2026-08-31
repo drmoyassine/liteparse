@@ -85,6 +85,20 @@ export type {
   MoonshineModelId,
   SttLanguage,
 } from "./engines/moonshine/shared/models.js";
+// Track 3 (speech) Phase C: the browser Moonshine engine (onnxruntime-web/wasm).
+// Re-exported from the main entry for the same vite/rollup-symlink reason as
+// the RapidOCR runner above; the canonical subpath is liteparse/engines/moonshine.
+// All ort access is lazy/dynamic, so the core bundle still never links it.
+export {
+  createMoonshineSttEngine,
+  createMoonshineRunner,
+  createMoonshineModelOrigin,
+} from "./engines/moonshine/index.js";
+export type {
+  MoonshineBrowserOptions,
+  MoonshineRunnerHandle,
+  MoonshineSttEngineOptions,
+} from "./engines/moonshine/index.js";
 
 // Intelligent Document Router (0.3.0+) — contracts only for now; the classify /
 // capabilities / route functions ship in later phases. See ARCHITECTURE.md.
