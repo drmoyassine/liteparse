@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PER_PAGE_TIMEOUT_MS, toParseOptions } from "../src/service.js";
-import type { OcrEngine, PdfLibrary, RasterAdapter } from "liteparse";
+import type { OcrEngine, PdfLibrary, RasterAdapter } from "@drmoyassine/liteparse";
 
 const adapters = {
   raster: {} as RasterAdapter,

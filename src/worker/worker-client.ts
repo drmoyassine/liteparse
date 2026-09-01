@@ -285,7 +285,7 @@ export function createWorkerOcrClient(opts: WorkerOcrClientOptions): WorkerOcrCl
  * trigger, and a `dispose()` for HMR. Trigger *timing* (when to warm up — e.g. on panel
  * mount) stays in the consumer:
  *
- *   import { createWorkerOcrClient, createWorkerOcrSingleton } from "liteparse";
+ *   import { createWorkerOcrClient, createWorkerOcrSingleton } from "@drmoyassine/liteparse";
  *   const ocr = createWorkerOcrSingleton(async () => {
  *     const { default: W } = await import("./my-ocr.worker.ts?worker");
  *     return createWorkerOcrClient({ worker: new W(), timeoutMs: 60_000 });

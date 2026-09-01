@@ -21,8 +21,8 @@ export { createVlmOcrEngine } from "./ocr/vlm.js";
 export { createRapidOcrEngine } from "./ocr/rapidocr.js";
 export type { OcrRunner, RapidOcrOptions } from "./ocr/rapidocr.js";
 // Browser RapidOCR runner (ONNX-based, HF models + IndexedDB cache). Exported from the
-// main entry so the consumer worker can import from "liteparse" instead of the subpath
-// "liteparse/engines/rapidocr" — vite/rollup fails to bundle subpath exports from
+// main entry so the consumer worker can import from "@drmoyassine/liteparse" instead of the subpath
+// "@drmoyassine/liteparse/engines/rapidocr" — vite/rollup fails to bundle subpath exports from
 // symlinked packages (https://github.com/vitejs/vite/issues/...). The runner and model
 // origin factories are the public surface for browser OCR; other internals stay in the
 // engines subpath.
@@ -69,7 +69,7 @@ export type {
 export { createServerSttGateway } from "./stt/gateway.server.js";
 export type { ServerSttOptions } from "./stt/gateway.server.js";
 // Track 3 (speech): the local Moonshine engine for Node (onnxruntime-node) is
-// subpath-only ("liteparse/stt/moonshine-server"), like ./ocr/rapidocr-server —
+// subpath-only ("@drmoyassine/liteparse/stt/moonshine-server"), like ./ocr/rapidocr-server —
 // it imports node builtins and must stay out of the isomorphic core bundle.
 // The runtime-agnostic STT core it shares with the (Phase C) browser engine is
 // pure TS, so it re-exports here (stt-lab + gateway consumers want the floors
@@ -87,7 +87,7 @@ export type {
 } from "./engines/moonshine/shared/models.js";
 // Track 3 (speech) Phase C: the browser Moonshine engine (onnxruntime-web/wasm).
 // Re-exported from the main entry for the same vite/rollup-symlink reason as
-// the RapidOCR runner above; the canonical subpath is liteparse/engines/moonshine.
+// the RapidOCR runner above; the canonical subpath is @drmoyassine/liteparse/engines/moonshine.
 // All ort access is lazy/dynamic, so the core bundle still never links it.
 export {
   createMoonshineSttEngine,
@@ -101,7 +101,7 @@ export type {
 } from "./engines/moonshine/index.js";
 // Track 3 (speech) Phase D: live dictation. The client ships from the main
 // entry (createDictation + the protocol surface); the worker and worklet are
-// their own subpaths (liteparse/stt/dictation-worker, liteparse/stt/worklet)
+// their own subpaths (@drmoyassine/liteparse/stt/dictation-worker, @drmoyassine/liteparse/stt/worklet)
 // that consumers point new Worker()/addModule() at — the same self-hosted-
 // asset pattern as /ort/. The worker's core (createDictationCore) is also
 // importable from the dictation-worker subpath for custom hosts.

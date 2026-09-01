@@ -12,7 +12,7 @@ import type { OcrContext, OcrEngine, OcrResult } from "../types.js";
  * so liteparse itself stays dependency-free. Register once at app start:
  *
  *   import { createOCR } from "client-side-ocr";
- *   import { createRapidOcrEngine, setBrowserOcrEngine } from "liteparse";
+ *   import { createRapidOcrEngine, setBrowserOcrEngine } from "@drmoyassine/liteparse";
  *   const ocr = await createOCR();
  *   setBrowserOcrEngine(createRapidOcrEngine({
  *     runner: { recognize: async (image) => { ... return { text }; } },

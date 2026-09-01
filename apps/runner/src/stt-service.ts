@@ -5,14 +5,14 @@ import {
   sttFloorFor,
   type SttLanguage,
   type SttResult,
-} from "liteparse";
+} from "@drmoyassine/liteparse";
 import {
   createMoonshineServerEngine,
   parseWavPcm16,
   WavError,
   type MoonshineServerEngine,
   type MoonshineServerOptions,
-} from "liteparse/stt/moonshine-server";
+} from "@drmoyassine/liteparse/stt/moonshine-server";
 import type { RequestedTranscribeOptions } from "./types.js";
 
 /**

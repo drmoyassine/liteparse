@@ -1,7 +1,7 @@
 import { serve } from "@hono/node-server";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
-import { createRapidOcrServerEngine } from "liteparse/ocr/rapidocr-server";
+import { createRapidOcrServerEngine } from "@drmoyassine/liteparse/ocr/rapidocr-server";
 import { createLiteparseService } from "./service.js";
 import { createSttService } from "./stt-service.js";
 

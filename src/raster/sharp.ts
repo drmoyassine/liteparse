@@ -1,12 +1,12 @@
 import type { PdfDocumentLike, PreprocessOptions, RasterAdapter } from "../types.js";
 
 /**
- * Node raster adapter (opt-in subpath `liteparse/raster/sharp`).
+ * Node raster adapter (opt-in subpath `@drmoyassine/liteparse/raster/sharp`).
  *
  * Not imported by the core bundle. The consumer installs the native deps and
  * creates the adapter explicitly:
  *
- *   import { createSharpRaster } from "liteparse/raster/sharp";
+ *   import { createSharpRaster } from "@drmoyassine/liteparse/raster/sharp";
  *   const raster = await createSharpRaster();
  *   const { text } = await parseDocument(file, { raster, vlm });
  *

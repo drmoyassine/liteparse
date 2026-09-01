@@ -25,7 +25,7 @@
 //
 // The import is dynamic, not static: onnxruntime-web is a peerDependency, and
 // the main liteparse index re-exports this module — a static import made
-// `import "liteparse"` crash at module-link time (ERR_MODULE_NOT_FOUND) for any
+// `import "@drmoyassine/liteparse"` crash at module-link time (ERR_MODULE_NOT_FOUND) for any
 // consumer that installs without the peer (Node/Deno runtimes; first seen in
 // the apps/runner Docker image). pdfjs-dist (pdf.ts) and onnxruntime-node
 // (ocr/rapidocr-server.ts) are dynamic for the same reason. ort is loaded once
@@ -67,7 +67,7 @@ import type { OcrRunner } from "../../ocr/rapidocr.js";
 // NOTE: this module MUST NOT import from "../../worker/ocr-worker.js".
 // ocr-worker.ts carries the self-installing worker shell (`if (isWorkerScope())
 // installWorker()`), and because this runner is published under the separate
-// `liteparse/engines/rapidocr` subpath (its own tsup bundle), importing the shell
+// `@drmoyassine/liteparse/engines/rapidocr` subpath (its own tsup bundle), importing the shell
 // here bakes a SECOND copy of it into that bundle. The worker then loads two shell
 // instances — the subpath's installWorker() runs second and overwrites the real
 // onmessage, but reads a workerConfig that configureWorker never wrote to, so

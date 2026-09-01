@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_STT_MODEL, ESCALATION_STT_MODEL, type SttResult } from "liteparse";
-import type { MoonshineServerEngine, MoonshineServerOptions } from "liteparse/stt/moonshine-server";
+import { DEFAULT_STT_MODEL, ESCALATION_STT_MODEL, type SttResult } from "@drmoyassine/liteparse";
+import type { MoonshineServerEngine, MoonshineServerOptions } from "@drmoyassine/liteparse/stt/moonshine-server";
 import { createSttService, TranscribeHttpError, type SttServiceDeps } from "../src/stt-service.js";
 
 /**

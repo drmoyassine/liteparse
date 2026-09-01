@@ -12,7 +12,7 @@ import type { OcrRunner } from "../ocr/rapidocr.js";
  *   npm install client-side-ocr onnxruntime-web
  *
  *   import { createOCR } from "client-side-ocr";
- *   import { createRapidOcrEngine, setBrowserOcrEngine } from "liteparse";
+ *   import { createRapidOcrEngine, setBrowserOcrEngine } from "@drmoyassine/liteparse";
  *   import { createRunnerFromOcrPackage } from "./rapidocr-runner.browser"; // copy locally
  *
  *   const ocr = await createOCR(); // downloads models on first use

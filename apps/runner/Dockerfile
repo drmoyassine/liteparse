@@ -5,7 +5,7 @@
 #   docker build -f apps/runner/Dockerfile -t liteparse-runner .
 #
 # Why the npm-pack dance in the build stage: apps/runner declares
-# "liteparse": "file:../..", which npm materializes as a SYMLINK to the repo
+# "@drmoyassine/liteparse": "file:../..", which npm materializes as a SYMLINK to the repo
 # root — Node then resolves liteparse's own imports from the realpath, so at
 # runtime the container would need the root's node_modules too. Installing the
 # packed tarball instead gives a REAL copy under apps/runner/node_modules with
@@ -114,7 +114,7 @@ RUN <<'EOF'
 set -eux
 npm install --no-audit --no-fund
 # Replace the file:../.. symlink with a REAL copy from the tarball (see header).
-npm install --no-save /tmp/liteparse-*.tgz
+npm install --no-save /tmp/drmoyassine-liteparse-*.tgz
 npm run build
 EOF
 

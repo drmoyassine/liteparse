@@ -1,5 +1,5 @@
 {
-  "name": "liteparse",
+  "name": "@drmoyassine/liteparse",
   "version": "0.4.0",
   "description": "Isomorphic document text extraction (PDF, Office, images) with swappable raster/OCR/VLM adapters. Runs in the browser, Node, and Deno/edge.",
   "type": "module",
@@ -11,7 +11,7 @@
   },
   "homepage": "https://github.com/drmoyassine/liteparse#readme",
   "bugs": {
-    "url": "https://github.com/drmoyassine/liteparse/issues"
+    "url": "https://github.com/drmoyassine/@drmoyassine/liteparse/issues"
   },
   "keywords": [
     "document",

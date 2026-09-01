@@ -1,12 +1,12 @@
 /**
- * Browser Moonshine engine (onnxruntime-web/wasm) — `liteparse/engines/moonshine`.
+ * Browser Moonshine engine (onnxruntime-web/wasm) — `@drmoyassine/liteparse/engines/moonshine`.
  *
  * Consumer wiring (the whole browser STT tier):
  *
  * ```ts
- * import { createMoonshineSttEngine } from "liteparse/engines/moonshine";
- * import { createMoonshineModelOrigin } from "liteparse/engines/moonshine";
- * import { setBrowserSttEngine } from "liteparse";
+ * import { createMoonshineSttEngine } from "@drmoyassine/liteparse/engines/moonshine";
+ * import { createMoonshineModelOrigin } from "@drmoyassine/liteparse/engines/moonshine";
+ * import { setBrowserSttEngine } from "@drmoyassine/liteparse";
  *
  * setBrowserSttEngine(
  *   createMoonshineSttEngine({

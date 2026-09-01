@@ -3,18 +3,18 @@
  *
  * Owns everything platform-side so the composer doesn't touch raw audio APIs:
  * getUserMedia (or an injected MediaStream), the AudioContext + AudioWorklet
- * graph (`liteparse-capture` from `liteparse/stt/worklet`), frame relay into
+ * graph (`liteparse-capture` from `@drmoyassine/liteparse/stt/worklet`), frame relay into
  * the dictation worker, and the protocol event surface (`onInterim`,
  * `onFinal`, `onError`). The worker is INJECTED (consumers host
- * `liteparse/stt/dictation-worker` — or their own — and keep it across
+ * `@drmoyassine/liteparse/stt/dictation-worker` — or their own — and keep it across
  * sessions; the client neither spawns nor terminates it).
  *
  * Consumer wiring:
  *
  * ```ts
  * const dictation = createDictation({
- *   worker: new Worker(new URL("liteparse/stt/dictation-worker", import.meta.url), { type: "module" }),
- *   workletUrl: new URL("liteparse/stt/worklet", import.meta.url), // self-hosted, like /ort/
+ *   worker: new Worker(new URL("@drmoyassine/liteparse/stt/dictation-worker", import.meta.url), { type: "module" }),
+ *   workletUrl: new URL("@drmoyassine/liteparse/stt/worklet", import.meta.url), // self-hosted, like /ort/
  *   language: "ar",
  *   onFinal: (f) => composer.insert(f.text),
  *   onInterim: (i) => composer.preview(i.text),
@@ -59,7 +59,7 @@ export interface DictationHandlers {
 export interface DictationConfig extends DictationHandlers {
   /** The dictation worker (hosted by the consumer; never terminated here). */
   worker: WorkerLike;
-  /** URL passed to `audioWorklet.addModule` — the `liteparse/stt/worklet` entry. */
+  /** URL passed to `audioWorklet.addModule` — the `@drmoyassine/liteparse/stt/worklet` entry. */
   workletUrl: string | URL;
   /** Session language (default "en"). */
   language?: SttLanguage;

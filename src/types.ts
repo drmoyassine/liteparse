@@ -237,7 +237,7 @@ export interface ParseOptions {
   /**
    * Inject an STT gateway used to transcribe audio documents (the external tier:
    * quality ceiling and fallback for local STT). Reference implementation:
-   * `createServerSttGateway` (subpath `liteparse/stt/server`).
+   * `createServerSttGateway` (subpath `@drmoyassine/liteparse/stt/server`).
    */
   stt?: SttGateway;
   /**

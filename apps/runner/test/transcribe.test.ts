@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { TranscribeHttpError, type SttService, type SttServiceResult } from "../src/stt-service.js";
-import type { ParsedDocument } from "liteparse";
+import type { ParsedDocument } from "@drmoyassine/liteparse";
 import type { ParseService } from "../src/service.js";
 
 /** Full-app /transcribe tests with a spying fake STT service (the escalation

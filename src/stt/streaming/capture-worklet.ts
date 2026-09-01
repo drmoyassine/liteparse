@@ -1,6 +1,6 @@
 /**
  * Capture AudioWorkletProcessor for live dictation — dependency-free by
- * contract: this file is shipped as its own entry (`liteparse/stt/worklet`)
+ * contract: this file is shipped as its own entry (`@drmoyassine/liteparse/stt/worklet`)
  * and loaded with `audioWorklet.addModule(url)`, so it imports NOTHING and
  * inlines its own scope declarations (the AudioWorkletGlobalScope globals are
  * not reliably in TS's DOM lib).

@@ -54,7 +54,7 @@ import type { ModelOrigin } from "../../worker/model-origin.js";
 import { resolveModel, createThrowModelOrigin } from "../../worker/model-origin.js";
 // NOTE: this module MUST NOT import "../../worker/ocr-worker.js" — it carries
 // the self-installing worker shell, and this engine ships under its own tsup
-// entry (liteparse/engines/moonshine); importing the shell would bake a SECOND
+// entry (@drmoyassine/liteparse/engines/moonshine); importing the shell would bake a SECOND
 // copy into that bundle and overwrite the worker's onmessage (the RapidOCR
 // double-shell bug). The model origin is INJECTED, never read from worker config.
 import type { SttEngine, SttResult, SttTranscribeOptions } from "../../types.js";

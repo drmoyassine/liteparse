@@ -10,7 +10,7 @@
  *
  * Consumer app creates the Worker instance and calls createRapidOcrRunner:
  *
- *   import { createRapidOcrRunner } from "liteparse/engines/rapidocr";
+ *   import { createRapidOcrRunner } from "@drmoyassine/liteparse/engines/rapidocr";
  *
  *   // In your worker file or main thread:
  *   const runner = createRapidOcrRunner({ eagerInit: true });

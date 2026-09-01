@@ -1,6 +1,6 @@
 /**
  * Ambient shims for optional native dependencies used only by opt-in subpath
- * adapters (`liteparse/raster/sharp`, `liteparse/ocr/rapidocr`). Declaring them as
+ * adapters (`@drmoyassine/liteparse/raster/sharp`, `@drmoyassine/liteparse/ocr/rapidocr`). Declaring them as
  * `any` lets the package build and type-check without the packages installed; the
  * adapter factories still return fully-typed {@link import("./types.js").RasterAdapter}
  * / OcrEngine interfaces, so consumers' public API types are unaffected.

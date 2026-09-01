@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { ParseService } from "../src/service.js";
 import type { SttService } from "../src/stt-service.js";
-import type { ParsedDocument } from "liteparse";
+import type { ParsedDocument } from "@drmoyassine/liteparse";
 
 /** A deterministic stand-in ParsedDocument. */
 function fakeDoc(over: Partial<ParsedDocument> = {}): ParsedDocument {

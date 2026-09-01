@@ -5,10 +5,10 @@ import {
   type ParsedDocument,
   type PdfLibrary,
   type RasterAdapter,
-} from "liteparse";
-import { createRapidOcrServerEngine } from "liteparse/ocr/rapidocr-server";
-import { createSharpRaster } from "liteparse/raster/sharp";
-import { createServerVlmGateway } from "liteparse/vlm/server";
+} from "@drmoyassine/liteparse";
+import { createRapidOcrServerEngine } from "@drmoyassine/liteparse/ocr/rapidocr-server";
+import { createSharpRaster } from "@drmoyassine/liteparse/raster/sharp";
+import { createServerVlmGateway } from "@drmoyassine/liteparse/vlm/server";
 import type { RequestedParseOptions } from "./types.js";
 
 /**

@@ -6,7 +6,7 @@ import type { SttGateway, SttTranscribeOptions } from "../types.js";
  * `gpt-4o-transcribe`). The audio is sent as multipart/form-data — the shape
  * every OpenAI-compatible transcriptions API expects.
  *
- * Mirrors {@link createServerVlmGateway} (`liteparse/vlm/server`): zero provider
+ * Mirrors {@link createServerVlmGateway} (`@drmoyassine/liteparse/vlm/server`): zero provider
  * coupling beyond the OpenAI-compatible wire format, key via header, and the
  * resolve-`{ text: "" }`-never-throw contract so the liteparse cascade can fall
  * through when the gateway can't transcribe.

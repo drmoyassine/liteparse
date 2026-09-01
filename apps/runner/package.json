@@ -1,5 +1,5 @@
 {
-  "name": "@liteparse/runner",
+  "name": "@@drmoyassine/liteparse/runner",
   "private": true,
   "version": "0.2.0",
   "type": "module",
@@ -22,7 +22,7 @@
     "canvas": "^3.1.0",
     "dommatrix": "^1.0.3",
     "hono": "^4.7.0",
-    "liteparse": "file:../..",
+    "@drmoyassine/liteparse": "file:../..",
     "onnxruntime-node": "^1.22.0",
     "pdfjs-dist": "^4.8.0",
     "sharp": "^0.34.0"

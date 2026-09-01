@@ -42,7 +42,7 @@ import {
  *   - `@napi-rs/canvas` — image decode + 2D canvas for preprocess/crop
  *
  * Usage:
- *   import { createRapidOcrServerEngine } from "liteparse/ocr/rapidocr-server";
+ *   import { createRapidOcrServerEngine } from "@drmoyassine/liteparse/ocr/rapidocr-server";
  *   const engine = await createRapidOcrServerEngine();
  *   const { text } = await engine.recognize(pngBytes, { pageIndex: 0, totalPages: 1 });
  *

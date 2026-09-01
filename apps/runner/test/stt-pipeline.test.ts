@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSttService } from "../src/stt-service.js";
-import { DEFAULT_STT_MODEL, ESCALATION_STT_MODEL } from "liteparse";
+import { DEFAULT_STT_MODEL, ESCALATION_STT_MODEL } from "@drmoyassine/liteparse";
 
 /**
  * The REAL STT end-to-end proof: genuine Moonshine artifacts through the

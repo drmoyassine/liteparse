@@ -8,7 +8,7 @@ import { parseWavPcm16, WavError } from "../engines/moonshine/shared/wav.js";
 // Re-exported so the runner's stt-service can pre-flight the WAV contract and
 // instanceof-check the failure. This subpath bundles its own copy of shared/wav
 // (tsup entry chunks don't share modules), so importing the class from the
-// "liteparse" index instead would yield a DIFFERENT class object and the check
+// "@drmoyassine/liteparse" index instead would yield a DIFFERENT class object and the check
 // would silently always fail — the class must come from the same chunk.
 export { parseWavPcm16, WavError };
 import { loadTokenizer, stripTashkeel, type Tokenizer } from "../engines/moonshine/shared/tokens.js";
