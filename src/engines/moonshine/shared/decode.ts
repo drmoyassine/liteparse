@@ -4,8 +4,8 @@
  * The Node engine (stt/moonshine-server, onnxruntime-node) and the browser
  * engine (engines/moonshine/moonshine-browser, onnxruntime-web/wasm) execute
  * the IDENTICAL loop through this module: one source of decode knowledge, so a
- * graph quirk fixed here is fixed everywhere (notably the batch export's broken
- * cache-branch encoder-KV presents — see decodeBatch).
+ * graph quirk fixed here is fixed everywhere (notably the batch export's
+ * prefill-only cross-KV threading and the anti-loop decode budget — both loops).
  *
  * Host-specific concerns stay OUT: sessions are opaque {@link DecodeSession}s
  * (both ort runtimes structurally satisfy this), tensors are constructed by an
@@ -14,6 +14,7 @@
  * browser).
  */
 import { greedyPick } from "./confidence.js";
+import { MODEL_SAMPLE_RATE } from "./audio.js";
 import type { MoonshineModelDescriptor, StreamingConfig } from "./models.js";
 
 /** What an InferenceSession means to the decode loops: feed map in, output map out. */
@@ -100,7 +101,9 @@ export async function decodeStreaming(
   let vSelf: unknown = t("float32", new Float32Array(0), kvDims);
   let token: unknown = t("int64", BigInt64Array.of(BigInt(m.desc.bosId)), [1, 1]);
 
-  for (let step = 0; step < m.desc.maxTokens; step++) {
+  const maxTokens = tokenBudget(m.desc, samples.length / MODEL_SAMPLE_RATE);
+
+  for (let step = 0; step < maxTokens; step++) {
     if (signal?.aborted) throw new Error("aborted");
     const out = await m.decoderKv.run({
       token,
@@ -122,6 +125,35 @@ export async function decodeStreaming(
 
 /** Batch merged-decoder KV kinds × layers, e.g. past_key_values.0.decoder.key. */
 const BATCH_KV_KINDS = ["decoder.key", "decoder.value", "encoder.key", "encoder.value"] as const;
+
+/**
+ * Anti-hallucination-loop decode budget, per the model authors' own runtime
+ * policy: cap generated tokens proportionally to audio length instead of a
+ * flat ceiling. Batch family: 13 tok/s (the moonshine-tiny-ar model card's
+ * stated anti-loop mitigation); streaming family: 6.5 tok/s (the official
+ * moonshine-v2 C++ runtime's decode_full policy). The descriptor's maxTokens
+ * (position-embedding limit) stays the hard ceiling; a small floor keeps a
+ * sub-second blip able to emit a word.
+ */
+function tokenBudget(desc: MoonshineModelDescriptor, seconds: number): number {
+  const rate = desc.variant === "streaming" ? 6.5 : 13;
+  return Math.max(8, Math.min(desc.maxTokens, Math.ceil(seconds * rate)));
+}
+
+/**
+ * Force-stop signal for a degenerate autoregressive loop: the last NG tokens
+ * exactly repeat the NG before them. A real transcript repeating an 8-token
+ * span verbatim is not a thing ASR output does; a hallucinating LM prior does
+ * it constantly. Complements the length cap — the model card's AR models are
+ * documented loopers even on clean input.
+ */
+const LOOP_NGRAM = 8;
+function inLoop(ids: readonly number[]): boolean {
+  if (ids.length < LOOP_NGRAM * 2) return false;
+  const head = ids.slice(ids.length - LOOP_NGRAM * 2, ids.length - LOOP_NGRAM);
+  const tail = ids.slice(ids.length - LOOP_NGRAM);
+  return head.every((v, i) => v === tail[i]);
+}
 
 export async function decodeBatch(
   m: BatchDecodeModel,
@@ -153,7 +185,9 @@ export async function decodeBatch(
     }
   }
 
-  for (let step = 0; step < m.desc.maxTokens; step++) {
+  const maxTokens = tokenBudget(m.desc, samples.length / MODEL_SAMPLE_RATE);
+
+  for (let step = 0; step < maxTokens; step++) {
     if (signal?.aborted) throw new Error("aborted");
     const out = await m.decoder.run({
       input_ids: t("int64", BigInt64Array.of(BigInt(step === 0 ? m.desc.bosId : ids[step - 1]!)), [1, 1]),
@@ -167,16 +201,20 @@ export async function decodeBatch(
     logProbs.push(pick.logProb);
     for (let l = 0; l < g.depth; l++) {
       for (const kind of BATCH_KV_KINDS) {
-        // The merged export's cache branch (use_cache_branch=1) emits BROKEN
-        // encoder-KV presents — [0,8,1,36] with dim 0 zeroed (probed 2026-09-01
-        // against moonshine-tiny-ar-ONNX; feeding one back fails encoder_attn's
-        // MatMul at step 3). That branch recomputes cross-KV from
-        // encoder_hidden_states each step, so the encoder past stays EMPTY —
-        // thread ONLY the decoder self-KV, never the encoder presents.
-        if (kind.startsWith("encoder.")) continue;
+        // The prefill step (use_cache_branch=0) emits the REAL cross-attention
+        // KV computed from encoder_hidden_states (present.*.encoder.* =
+        // [1,heads,encFrames,headDim]) — thread it ONCE, then FREEZE: the
+        // cache branch consumes the threaded encoder past and emits only an
+        // empty placeholder ([0,heads,1,headDim], dim-0 zeroed — probed
+        // 2026-09-01; it never recomputes cross-KV). Skipping this threading
+        // leaves cross-attention with empty K/V at every step ≥ 1 — the
+        // decoder goes DEAF and babbles LM-prior text to the token cap
+        // (tiny-ar hallucination loops, base-en truncated summaries).
+        if (step > 0 && kind.startsWith("encoder.")) continue;
         past[`past_key_values.${l}.${kind}`] = out[`present.${l}.${kind}`];
       }
     }
+    if (inLoop(ids)) break; // degenerate repetition — cut before the cap fills
   }
   return { ids, logProbs };
 }

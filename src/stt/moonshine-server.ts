@@ -194,8 +194,8 @@ function createEngine(server: MoonshineServer, opts: MoonshineServerOptions): Mo
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Model loading (the decode loops themselves live in shared/decode.ts — one
-// source for both runtimes, so a graph quirk like the batch export's broken
-// cache-branch encoder-KV presents is fixed once, not ported)
+// source for both runtimes, so a graph quirk like the batch export's
+// prefill-only cross-KV threading is fixed once, not ported)
 // ─────────────────────────────────────────────────────────────────────────────
 
 

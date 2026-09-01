@@ -346,10 +346,12 @@ describe("transcribe — AR batch family", () => {
     expect(result.text).toBe("مُحَمَّد");
   });
 
-  it("holds encoder KV constant across steps (broken cache-branch presents)", async () => {
-    // Regression: the merged export's use_cache_branch=1 path emits [0,8,1,36]
-    // encoder-KV presents; threading them crashes step 3 (probed 2026-09-01).
-    // Only decoder self-KV may be threaded — cross-attention KV is source-only.
+  it("threads prefill cross-KV once, then freezes it (cache-branch encoder presents are placeholders)", async () => {
+    // Regression: the prefill step (use_cache_branch=0) emits the REAL
+    // cross-attention KV from encoder_hidden_states; the cache branch never
+    // recomputes it and only emits empty [0,8,1,36] placeholders (probed
+    // 2026-09-01). Skipping the prefill threading left cross-attention with
+    // empty K/V — the decoder went deaf and hallucinated loops to the cap.
     const root = fakeModelRoot();
     tempDirs.push(root);
     const { mod, ort } = await freshModule({ batchTokens: [20, 20, 2] });
@@ -365,16 +367,16 @@ describe("transcribe — AR batch family", () => {
     expect(dec[2]!.feeds["past_key_values.0.decoder.key"]).toBe(
       dec[1]!.outputs["present.0.decoder.key"],
     );
-    // Encoder past is never threaded from the (broken) presents: every step
-    // feeds the same initial empty tensors — the graph recomputes cross-KV
-    // from encoder_hidden_states on the cache branch.
+    // Cross-KV threads ONCE from the prefill presents, then FREEZES: steps ≥ 1
+    // all feed step 0's encoder present — never the cache branch's placeholder
+    // emits and never the initial empty tensors.
     expect(dec[1]!.feeds["past_key_values.0.encoder.key"]).toBe(
-      dec[0]!.feeds["past_key_values.0.encoder.key"],
+      dec[0]!.outputs["present.0.encoder.key"],
     );
     expect(dec[2]!.feeds["past_key_values.0.encoder.key"]).toBe(
-      dec[0]!.feeds["past_key_values.0.encoder.key"],
+      dec[0]!.outputs["present.0.encoder.key"],
     );
-    expect(dec[2]!.feeds["past_key_values.0.encoder.key"]!.dims).toEqual([1, 8, 0, 36]);
+    expect(dec[1]!.feeds["past_key_values.0.encoder.key"]!.dims).toEqual([1, 8, 1, 36]);
   });
 });
 

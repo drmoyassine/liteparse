@@ -153,14 +153,22 @@ export. Mixed AR/EN quality is therefore a property of the model we already run;
   standard transformers.js merged export: `input_ids`, `encoder_hidden_states`,
   `past_key_values.{0-5}.{decoder,encoder}.{key,value}`, `use_cache_branch` →
   **`logits`** + `present.*`. Classic `.onnx` loads from bytes in BOTH runtimes.
-  **Cache-branch quirk (probed 2026-09-01, real-model smoke):** with
-  `use_cache_branch=1` the export emits **broken encoder-KV presents**
-  (`[0,8,1,36]`, dim 0 zeroed); feeding one back fails encoder_attn's MatMul on the
-  next step. That branch recomputes cross-KV from `encoder_hidden_states` each
-  step, so the decoder loop must keep the encoder past **empty** and thread only
-  the decoder self-KV (`present.{l}.decoder.*`). Encoded once in
-  `src/stt/moonshine-server.ts` `decodeBatch`; the Phase C browser engine reuses
-  the same loop and inherits the fix.
+  **KV-threading contract (diagnosed + FIXED 2026-09-01, `probe-decode.ts` /
+  `probe-kv.ts` real-model runs):** the prefill step (`use_cache_branch=0`)
+  emits the REAL cross-attention KV (`present.{l}.encoder.*` =
+  `[1,8,encFrames,36]`); the cache branch (`=1`) consumes the threaded encoder
+  past and emits only empty placeholders (`[0,8,1,36]`, dim 0 zeroed — it never
+  recomputes cross-KV). Thread the prefill's encoder presents **once, then
+  frozen**, plus decoder self-KV per step (the official moonshine-js pattern).
+  Skipping the prefill threading leaves cross-attention with empty K/V — the
+  decoder goes DEAF and babbles LM-prior text to the token cap (tiny-ar
+  hallucination loops; base-en truncated "summaries"). An earlier probe fed the
+  cache branch's placeholder back, crashed, and misread this as "broken
+  presents — keep the encoder past empty"; that misread shipped as the deaf
+  decoder. Both loops also cap tokens proportionally to clip length (13 tok/s
+  batch — the tiny-ar card's stated anti-loop rule; 6.5 tok/s streaming — the
+  official C++ runtime) and force-stop on a repeated 8-token span. Fixed once in
+  `src/engines/moonshine/shared/decode.ts`; both runtimes inherit.
 - **Streaming-AR**: checkpoint exists (MIT) but **no ONNX export anywhere** — the
   cascade's AR legs run batch tiny-ar. If streaming-AR ONNX ever appears (official
   export or ours), it can slot in without architecture changes.

@@ -266,7 +266,8 @@ describe("createMoonshineSttEngine — AR batch family", () => {
     const enc = ort.runs.find((r) => r.tag === "encoder" && r.feeds["input_values"])!;
     expect(enc.feeds["input_values"]!.dims).toEqual([1, 1600]);
 
-    // Merged-decoder cache flow: use_cache_branch 0 → 1; only decoder self-KV threads.
+    // Merged-decoder cache flow: use_cache_branch 0 → 1; prefill cross-KV
+    // threads once then freezes, decoder self-KV threads every step.
     const dec = ort.runs.filter((r) => r.tag === "decoder");
     expect(dec).toHaveLength(2);
     expect(Array.from(dec[0]!.feeds["use_cache_branch"]!.data as Uint8Array)).toEqual([0]);
@@ -275,7 +276,7 @@ describe("createMoonshineSttEngine — AR batch family", () => {
       dec[0]!.outputs["present.0.decoder.key"],
     );
     expect(dec[1]!.feeds["past_key_values.0.encoder.key"]).toBe(
-      dec[0]!.feeds["past_key_values.0.encoder.key"],
+      dec[0]!.outputs["present.0.encoder.key"],
     );
   });
 

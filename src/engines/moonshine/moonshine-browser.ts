@@ -5,8 +5,8 @@
  *
  * Everything runtime-agnostic — WAV contract, mono/resample, tokenizer,
  * confidence, model descriptors, and the DECODE LOOPS — lives in ./shared/ and
- * is imported, not duplicated: a graph quirk (the batch export's broken
- * cache-branch encoder-KV presents) is fixed once for both runtimes.
+ * is imported, not duplicated: a graph quirk (the batch export's prefill-only
+ * cross-KV threading) is fixed once for both runtimes.
  *
  * Differences from the server engine, by design:
  *  - weights arrive via resolveModel (origin → IndexedDB read-through), not fs;
