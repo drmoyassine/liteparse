@@ -32,6 +32,14 @@ class FakeWorker implements WorkerLike {
     arr.push(listener);
     this.listeners.set(type, arr);
   }
+  removeEventListener(
+    type: "message" | "error" | "messageerror",
+    listener: (ev: { data?: unknown }) => void,
+  ): void {
+    const arr = this.listeners.get(type) ?? [];
+    const at = arr.indexOf(listener);
+    if (at >= 0) arr.splice(at, 1);
+  }
   terminate(): void {
     this.terminated = true;
   }

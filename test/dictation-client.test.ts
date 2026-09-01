@@ -31,12 +31,16 @@ function fakeWorker(autoReady = true) {
     addEventListener(_type: "message", listener: Listener) {
       listeners.push(listener);
     },
+    removeEventListener(_type: "message", listener: Listener) {
+      const at = listeners.indexOf(listener);
+      if (at >= 0) listeners.splice(at, 1);
+    },
     terminate: vi.fn(),
   };
   function emit(message: DictationOutbound) {
     for (const l of listeners) l({ data: message });
   }
-  return { worker: w as unknown as WorkerLike, posted, emit };
+  return { worker: w as unknown as WorkerLike, posted, emit, listenerCount: () => listeners.length };
 }
 
 /** Every AudioWorkletNode the fake ctor created (tests drive their ports). */
@@ -241,5 +245,55 @@ describe("createDictation — stop", () => {
     const { worker } = fakeWorker();
     const dictation = createDictation({ worker, workletUrl: "/w.js" });
     await expect(dictation.stop()).resolves.toBeUndefined();
+  });
+
+  it("detaches its worker listener on stop — a later shared-worker final is NOT double-delivered", async () => {
+    installAudioGlobals();
+    const onFinal = vi.fn();
+    const { worker, emit, listenerCount } = fakeWorker();
+    const dictation = createDictation({ worker, workletUrl: "/w.js", onFinal });
+    const { stream } = fakeStream();
+    await dictation.start(stream as unknown as MediaStream);
+    expect(listenerCount()).toBe(1);
+    await dictation.stop();
+    expect(listenerCount()).toBe(0); // detached AFTER the stopped confirmation
+    emit({ type: "final", text: "stale delivery", language: "en", startMs: 0, endMs: 10, reason: "flush" });
+    expect(onFinal).not.toHaveBeenCalled();
+  });
+
+  it("two sequential sessions on ONE shared worker: the stopped client stops receiving finals", async () => {
+    installAudioGlobals();
+    const aFinal = vi.fn();
+    const bFinal = vi.fn();
+    const { worker, emit, listenerCount } = fakeWorker();
+    // Session A — start, stop, abandon (exactly the composer/lab pattern).
+    const a = createDictation({ worker, workletUrl: "/w.js", onFinal: aFinal });
+    await a.start({ deviceId: "mic" });
+    await a.stop();
+    // Session B — a fresh client on the SAME shared worker.
+    const b = createDictation({ worker, workletUrl: "/w.js", onFinal: bFinal });
+    await b.start({ deviceId: "mic" });
+    expect(listenerCount()).toBe(1); // A's dead listener must be gone by now
+    emit({ type: "final", text: "one utterance", language: "en", startMs: 0, endMs: 10, reason: "hangover" });
+    expect(bFinal).toHaveBeenCalledTimes(1);
+    expect(aFinal).not.toHaveBeenCalled();
+    await b.stop();
+  });
+
+  it("a failed start detaches too — the client never went live", async () => {
+    installAudioGlobals();
+    vi.useFakeTimers();
+    try {
+      const { worker, listenerCount } = fakeWorker(false); // never ready → start rejects
+      const dictation = createDictation({ worker, workletUrl: "/w.js" });
+      const { stream } = fakeStream();
+      const pending = dictation.start(stream as unknown as MediaStream);
+      const assertion = expect(pending).rejects.toThrow(/did not post ready/);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+      expect(listenerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

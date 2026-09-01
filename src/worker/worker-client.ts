@@ -31,6 +31,10 @@ export interface WorkerLike {
     type: "message" | "error" | "messageerror",
     listener: (ev: { data?: unknown }) => void,
   ): void;
+  removeEventListener(
+    type: "message" | "error" | "messageerror",
+    listener: (ev: { data?: unknown }) => void,
+  ): void;
   terminate(): void;
 }
 

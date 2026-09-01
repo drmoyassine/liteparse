@@ -120,7 +120,15 @@ export function createDictation(cfg: DictationConfig): Dictation {
   let stoppedWaiter: (() => void) | null = null;
   let teardownAudio: (() => void) | null = null;
 
-  cfg.worker.addEventListener("message", (ev: { data?: unknown }) => {
+  // One named handler per client, detached when the client's session ends:
+  // the worker is SHARED (module-level singletons are the documented consumer
+  // pattern — one worker for the app's lifetime) and protocol messages are
+  // broadcast to EVERY listener. A client that stays attached after stop()
+  // delivers each later session's finals/interims to its stale callbacks too
+  // — duplicated composer insertions / duplicated transcript rows. Detach
+  // AFTER the stopped confirmation (and on a failed start) so the flush-tail
+  // finals still reach onFinal exactly once.
+  const onMessage = (ev: { data?: unknown }) => {
     const m = ev.data as DictationOutbound | undefined;
     if (!m) return;
     if (isDictationInterim(m)) cfg.onInterim?.(m);
@@ -128,7 +136,9 @@ export function createDictation(cfg: DictationConfig): Dictation {
     else if (isDictationError(m)) cfg.onError?.(m);
     else if (isDictationReady(m)) readyWaiter?.();
     else if (isDictationStopped(m)) stoppedWaiter?.();
-  });
+  };
+  cfg.worker.addEventListener("message", onMessage);
+  const detach = () => cfg.worker.removeEventListener("message", onMessage);
 
   async function start(source: MediaStream | { deviceId: string }): Promise<void> {
     if (active) throw new Error("dictation already started — stop() first");
@@ -207,6 +217,7 @@ export function createDictation(cfg: DictationConfig): Dictation {
       });
     } catch (err) {
       unwind(); // graph is half-built: release everything this call created
+      detach(); // a start that never went live must not linger on the shared worker
       throw err;
     }
 
@@ -218,18 +229,26 @@ export function createDictation(cfg: DictationConfig): Dictation {
     active = false;
     teardownAudio?.();
     teardownAudio = null;
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        stoppedWaiter = null;
-        reject(new Error(`worker did not confirm stop within ${STOP_TIMEOUT_MS}ms`));
-      }, STOP_TIMEOUT_MS);
-      stoppedWaiter = () => {
-        clearTimeout(timer);
-        stoppedWaiter = null;
-        resolve();
-      };
-      cfg.worker.postMessage({ type: "stop" });
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          stoppedWaiter = null;
+          reject(new Error(`worker did not confirm stop within ${STOP_TIMEOUT_MS}ms`));
+        }, STOP_TIMEOUT_MS);
+        stoppedWaiter = () => {
+          clearTimeout(timer);
+          stoppedWaiter = null;
+          resolve();
+        };
+        cfg.worker.postMessage({ type: "stop" });
+      });
+    } finally {
+      // The session is over either way — the stopped confirmation arrived, or
+      // it timed out and this client is done with the worker. Detaching on the
+      // timeout path too is what keeps N start/stop cycles from leaving N
+      // listeners on the shared worker.
+      detach();
+    }
   }
 
   return { start, stop };
