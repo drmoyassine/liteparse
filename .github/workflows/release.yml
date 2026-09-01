@@ -4,8 +4,11 @@
 #   npmjs.com → @drmoyassine/liteparse → Settings → Trusted Publisher → Add:
 #     Repository owner:    drmoyassine
 #     Repository name:     liteparse
-#     Workflow filename:   release.yml
+#     Workflow filename:   release.yml   (exact — with .yml, case-sensitive)
 #     Environment:         (leave blank)
+#
+# npm does NOT verify this registration when you save it — mismatches only
+# surface at publish time as ENEEDAUTH.
 #
 # Then every release is: bump version in package.json, commit, and
 #   git tag v0.4.1 && git push origin v0.4.1
@@ -23,14 +26,16 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      # No registry-url / NODE_AUTH_TOKEN: the OIDC identity from
-      # id-token: write IS the credential, and setup-node's placeholder token
-      # would shadow it.
-      - uses: actions/setup-node@v4
+      # Mirrors the official trusted-publishing example exactly: registry-url
+      # set, NO NODE_AUTH_TOKEN — the OIDC identity from id-token: write IS
+      # the credential. Provenance is automatic under trusted publishing.
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
 
       # Trusted publishing needs npm >= 11.5 — but stay ON major 11: npm 12
       # disables remote-tarball deps by default (EALLOWREMOTE) and this repo
@@ -50,7 +55,9 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
-      # prepublishOnly rebuilds; --provenance attests the build to this commit
-      # (repo is public, so provenance is available). No NODE_AUTH_TOKEN — the
-      # OIDC identity IS the credential.
-      - run: npm publish --access=public --provenance
+      # prepublishOnly rebuilds. --access=public: scoped packages default to
+      # restricted. No NODE_AUTH_TOKEN — the OIDC identity from id-token:
+      # write is exchanged for a short-lived publish token. Prove the version
+      # in the log: trusted publishing needs npm >= 11.5.1.
+      - run: node --version && npm --version
+      - run: npm publish --access=public
