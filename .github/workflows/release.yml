@@ -75,6 +75,9 @@ jobs:
       # npm skip the OIDC exchange and PUT with the dummy, which npmjs denies
       # as a masked 404. Empty it per-step so npm sees "no auth" and does the
       # exchange.
-      - run: npm publish --access=public
+      # --loglevel=verbose: npm's oidc() logs WHY the trusted-publishing token
+      # exchange failed (e.g. the registry's registration-mismatch message)
+      # only at verbose — at notice it fails silently into ENEEDAUTH.
+      - run: npm publish --access=public --loglevel=verbose
         env:
           NODE_AUTH_TOKEN: ""
