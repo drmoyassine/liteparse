@@ -25,13 +25,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No registry-url / NODE_AUTH_TOKEN: the OIDC identity from
+      # id-token: write IS the credential, and setup-node's placeholder token
+      # would shadow it.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
 
-      # Trusted publishing needs npm >= 11.5; Node 24 ships 11.x but pin newer.
-      - run: npm install -g npm@latest
+      # Trusted publishing needs npm >= 11.5 — but stay ON major 11: npm 12
+      # disables remote-tarball deps by default (EALLOWREMOTE) and this repo
+      # pins xlsx to the SheetJS CDN tarball.
+      - run: npm install -g npm@11
 
       - run: npm ci
 
