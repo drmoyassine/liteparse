@@ -1,0 +1,52 @@
+# npm trusted publishing (OIDC) — publishes with NO stored tokens and NO 2FA
+# prompts. Pair with the one-time npmjs.com setup:
+#
+#   npmjs.com → @drmoyassine/liteparse → Settings → Trusted Publisher → Add:
+#     Repository owner:    drmoyassine
+#     Repository name:     liteparse
+#     Workflow filename:   release.yml
+#     Environment:         (leave blank)
+#
+# Then every release is: bump version in package.json, commit, and
+#   git tag v0.4.1 && git push origin v0.4.1
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # the OIDC token npm exchanges for publish rights
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm >= 11.5; Node 24 ships 11.x but pin newer.
+      - run: npm install -g npm@latest
+
+      - run: npm ci
+
+      - name: Tag must match package.json version
+        run: |
+          v="v$(node -p "require('./package.json').version")"
+          if [ "$v" != "${{ github.ref_name }}" ]; then
+            echo "tag ${{ github.ref_name }} != package.json $v — bump package.json first" >&2
+            exit 1
+          fi
+
+      - run: npm run typecheck
+      - run: npm test
+
+      # prepublishOnly rebuilds; --provenance attests the build to this commit
+      # (repo is public, so provenance is available). No NODE_AUTH_TOKEN — the
+      # OIDC identity IS the credential.
+      - run: npm publish --access=public --provenance
