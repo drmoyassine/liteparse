@@ -55,29 +55,18 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
-      # Prove the runner can mint an OIDC token (id-token: write effective on
-      # this job). 200 + {"value":"eyJ..."} = good; 403 = permission problem.
-      - name: OIDC probe (debug)
-        run: |
-          code=$(curl -s -o /tmp/oidc.json -w "%{http_code}" \
-            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm")
-          echo "oidc status=$code"
-          head -c 160 /tmp/oidc.json; echo
-
-      # prepublishOnly rebuilds. --access=public: scoped packages default to
-      # restricted. Prove the version in the log: trusted publishing needs
-      # npm >= 11.5.1.
-      - run: node --version && npm --version
-
+      # prepublishOnly rebuilds; --access=public: scoped packages default to
+      # restricted. No NODE_AUTH_TOKEN — the OIDC identity from id-token:
+      # write IS the credential, exchanged for a short-lived publish token.
+      #
       # setup-node@v6 exports NODE_AUTH_TOKEN='XXXXX-XXXXX-XXXXX-XXXXX' (a
       # literal dummy) whenever registry-url is set — and ANY token value makes
       # npm skip the OIDC exchange and PUT with the dummy, which npmjs denies
-      # as a masked 404. Empty it per-step so npm sees "no auth" and does the
-      # exchange.
-      # --loglevel=verbose: npm's oidc() logs WHY the trusted-publishing token
-      # exchange failed (e.g. the registry's registration-mismatch message)
-      # only at verbose — at notice it fails silently into ENEEDAUTH.
+      # as a masked 404. Empty it per-step so npm sees "no auth".
+      #
+      # --loglevel=verbose: npm's oidc() logs WHY the token exchange failed
+      # (e.g. a trusted-publisher registration mismatch) only at verbose — at
+      # notice it fails silently into ENEEDAUTH.
       - run: npm publish --access=public --loglevel=verbose
         env:
           NODE_AUTH_TOKEN: ""
