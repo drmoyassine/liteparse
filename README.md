@@ -124,6 +124,63 @@ setBrowserOcrEngine(
 
 See `src/examples/rapidocr-runner.browser.ts` for a reusable runner adapter.
 
+## Speech (STT) — Moonshine, EN + AR
+
+`parseDocument()` accepts audio as a first-class kind. Register a local engine
+and/or an external gateway; local runs first and escalates on low confidence
+(floor 0.55) or failure:
+
+```ts
+import {
+  parseDocument,
+  setBrowserSttEngine,
+  createMoonshineSttEngine,
+  createMoonshineModelOrigin,
+  createServerSttGateway,
+} from "liteparse";
+
+setBrowserSttEngine(
+  createMoonshineSttEngine({ modelOrigin: createMoonshineModelOrigin() }),
+); // EN streaming-tiny + AR batch-tiny, ~139 MB, cached in IndexedDB
+
+const stt = createServerSttGateway({
+  endpoint: "https://api.openai.com/v1/audio/transcriptions",
+  apiKey: process.env.OPENAI_API_KEY,
+  model: "gpt-4o-transcribe",
+}); // optional escalation — resolves { text: "" }, never throws
+
+const { text } = await parseDocument(file, { stt, filename: "note.wav" });
+```
+
+Server-side instead: self-host the [parse runner](./apps/runner) and call
+`POST /transcribe` — same escalation walk, native speed.
+
+**Self-hosted assets (browser, same-origin):** copy `onnxruntime-web`'s wasm
+files to `/ort/` and the Moonshine tokenizer JSONs to `/models/moonshine/`
+(the `.ort` weights download from Hugging Face and cache). No COOP/COEP
+headers required — single-threaded WASM is the no-headers path.
+
+**Live dictation** — a separate lightweight client, not the parse worker.
+Host the two bundles as static assets and inject the worker (long-lived —
+don't spawn it per session):
+
+```ts
+import { createDictation } from "liteparse";
+
+const dictation = createDictation({
+  worker: new Worker("<assets>/dictation-worker.js", { type: "module" }), // liteparse/stt/dictation-worker
+  workletUrl: "<assets>/worklet.js", // liteparse/stt/worklet
+  language: "ar", // or "en"
+  onInterim: (i) => preview(i.text), // ~first at 900 ms, then ≥1.2 s apart
+  onFinal: (f) => insert(f.text), // after a ~480 ms pause; "" = gate dropped it
+});
+await dictation.start({ deviceId }); // or a MediaStream you own
+await dictation.stop();
+```
+
+Arabic diacritics are stripped by default (`keepDiacritics: true` to keep).
+Model variants, latency budget, and the D1/D2 streaming split: [ROADMAP.md](./ROADMAP.md) Track 3.
+
 ## Roadmap — Intelligent Document Router (`0.3.0+`)
 
 Today every document runs the same fixed cascade. The router **classifies once** (type, page count, scanned/digital, script/language) **then routes once** to the optimal strategy, replacing brute-force timeout fallback. Highlights:

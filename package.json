@@ -1,6 +1,6 @@
 {
   "name": "liteparse",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Isomorphic document text extraction (PDF, Office, images) with swappable raster/OCR/VLM adapters. Runs in the browser, Node, and Deno/edge.",
   "type": "module",
   "license": "MIT",
