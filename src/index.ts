@@ -76,6 +76,7 @@ export type { ServerSttOptions } from "./stt/gateway.server.js";
 // and descriptors without the engine).
 export { STT_CONFIDENCE_FLOOR, sttFloorFor } from "./engines/moonshine/shared/confidence.js";
 export {
+  BROWSER_DEFAULT_STT_MODEL,
   DEFAULT_STT_MODEL,
   ESCALATION_STT_MODEL,
   MOONSHINE_MODELS,
