@@ -133,7 +133,15 @@ function mockOrtFactory(script: Script = {}) {
       const outputs: Record<string, FakeTensor> = {};
       switch (name) {
         case "frontend.ort":
+        case "frontend.model.ort": // AR official set: same contract, weights fed separately
           outputs.features = T([1, 5, 320]);
+          break;
+        case "frontend.weights.ort":
+          // AR official artifacts: blob graph whose OUTPUTS are the frontend
+          // graph's weight INPUTS, matched by name (bindFrontendWeights merges).
+          outputs["onnx::MatMul_124_add_tensor_add_tensor"] = T([80, 320]);
+          outputs["onnx::Conv_127_add_tensor_add_tensor"] = T([640, 320, 5]);
+          outputs["onnx::Conv_134_add_tensor_add_tensor"] = T([320, 640, 5]);
           break;
         case "encoder.ort":
           outputs.encoded = T([1, 5, 288]);
@@ -303,12 +311,16 @@ describe("transcribe — EN streaming family", () => {
   });
 });
 
-describe("transcribe — AR batch family", () => {
+describe("transcribe — AR batch family (forced; the AR slot-1 default is streaming now)", () => {
   it("runs the merged-decoder KV flow and strips tashkeel by default", async () => {
     const root = fakeModelRoot();
     tempDirs.push(root);
     const { mod, ort } = await freshModule();
-    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
+    const engine = await mod.createMoonshineServerEngine({
+      debug: false,
+      modelPath: root,
+      model: "moonshine-batch-tiny-ar",
+    });
 
     const result = await engine.transcribe(testWav(), { language: "ar" });
     expect(result.text).toBe("محمد"); // مُحَمَّد minus diacritics
@@ -340,6 +352,7 @@ describe("transcribe — AR batch family", () => {
     const engine = await mod.createMoonshineServerEngine({
       debug: false,
       modelPath: root,
+      model: "moonshine-batch-tiny-ar",
       keepDiacritics: true,
     });
     const result = await engine.transcribe(testWav(), { language: "ar" });
@@ -355,7 +368,11 @@ describe("transcribe — AR batch family", () => {
     const root = fakeModelRoot();
     tempDirs.push(root);
     const { mod, ort } = await freshModule({ batchTokens: [20, 20, 2] });
-    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
+    const engine = await mod.createMoonshineServerEngine({
+      debug: false,
+      modelPath: root,
+      model: "moonshine-batch-tiny-ar",
+    });
     const result = await engine.transcribe(testWav(), { language: "ar" });
     expect(result.text).toBe("محمدمحمد");
     const dec = ort.runs.filter((r) => r.path === "decoder_model_merged_int8.onnx");
@@ -377,6 +394,64 @@ describe("transcribe — AR batch family", () => {
       dec[0]!.outputs["present.0.encoder.key"],
     );
     expect(dec[1]!.feeds["past_key_values.0.encoder.key"]!.dims).toEqual([1, 8, 1, 36]);
+  });
+});
+
+describe("transcribe — AR streaming family (official artifacts, slot-1 default)", () => {
+  it("binds the frontend weights pair and decodes through the streaming chain", async () => {
+    const root = fakeModelRoot();
+    tempDirs.push(root);
+    // Streaming script plays the AR vocab token (محمد) then EOS.
+    const { mod, ort } = await freshModule({ streamingTokens: [20, 2] });
+    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
+
+    const result = await engine.transcribe(testWav(), { language: "ar" });
+    expect(result.text).toBe("محمد"); // مُحَمَّد minus diacritics
+    expect(result.language).toBe("ar");
+
+    // The default AR slot is now the OFFICIAL streaming five-graph chain —
+    // front end shipped as graph + weights pair — not the batch pair.
+    expect(ort.created).toContain("frontend.model.ort");
+    expect(ort.created).toContain("frontend.weights.ort");
+    expect(ort.created).not.toContain("decoder_model_merged_int8.onnx");
+
+    // The weights blob runs EXACTLY ONCE at load; its outputs are threaded
+    // into every frontend call by NAME (bindFrontendWeights).
+    const weightRuns = ort.runs.filter((r) => r.path === "frontend.weights.ort");
+    expect(weightRuns).toHaveLength(1);
+    const frontend = ort.runs.find((r) => r.path === "frontend.model.ort")!;
+    for (const w of ["onnx::MatMul_124_add_tensor_add_tensor", "onnx::Conv_127_add_tensor_add_tensor", "onnx::Conv_134_add_tensor_add_tensor"]) {
+      expect(frontend.feeds[w]).toBe(weightRuns[0]!.outputs[w]);
+    }
+    // The decode itself is the plain streaming loop (BOS + empty self-KV).
+    const decoderRuns = ort.runs.filter((r) => r.path === "decoder_kv.ort");
+    expect(decoderRuns).toHaveLength(2); // محمد, EOS
+    expect(decoderRuns[0]!.feeds["k_self"]!.dims).toEqual([2, 1, 2, 0, 4]);
+  });
+
+  it("EN streaming loads monolithic — no weights session created", async () => {
+    const root = fakeModelRoot();
+    tempDirs.push(root);
+    const { mod, ort } = await freshModule();
+    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
+    await engine.transcribe(testWav()); // default language EN
+    expect(ort.created).toContain("frontend.ort");
+    expect(ort.created).not.toContain("frontend.weights.ort");
+    expect(ort.created).not.toContain("frontend.model.ort");
+  });
+
+  it("dispose releases the raw frontend pair alongside the chain", async () => {
+    const root = fakeModelRoot();
+    tempDirs.push(root);
+    const { mod, ort } = await freshModule({ streamingTokens: [20, 2] });
+    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
+    await engine.transcribe(testWav(), { language: "ar" });
+    engine.dispose();
+    const released = ort.created.length; // sessions are bare mocks; reload count proves release bookkeeping
+    const e2 = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
+    await e2.transcribe(testWav(), { language: "ar" });
+    // Everything (graph + weights + encoder + adapter + cross_kv + decoder) recreated.
+    expect(ort.created.length).toBe(released * 2);
   });
 });
 
@@ -443,8 +518,13 @@ describe("engine contract", () => {
     const { mod, ort } = await freshModule();
     const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
     await engine.warm("ar");
-    expect(ort.created).toContain("decoder_model_merged_int8.onnx");
-    expect(ort.runs).toHaveLength(0);
+    // AR slot 1 = official streaming set: BOTH frontend files load, and the
+    // weights blob is run ONCE at bind (it is part of loading, not decoding) —
+    // but no decode graph (frontend model / decoder) may run without audio.
+    expect(ort.created).toContain("frontend.model.ort");
+    expect(ort.created).toContain("frontend.weights.ort");
+    expect(ort.runs.filter((r) => r.path === "frontend.weights.ort")).toHaveLength(1);
+    expect(ort.runs.filter((r) => r.path === "decoder_kv.ort")).toHaveLength(0);
   });
 });
 

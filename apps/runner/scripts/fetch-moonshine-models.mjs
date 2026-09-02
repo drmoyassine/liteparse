@@ -21,7 +21,12 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MODELS_DIR = resolve(HERE, "..", "models", "moonshine");
 
-/** [subdir, filename, url, expectedMiB] — sizes measured 2026-09-01 (MiB). */
+/**
+ * [subdir, filename, url, expectedMiB, minBytes?] — sizes measured 2026-09-01
+ * (AR streaming 2026-09-02). minBytes overrides the 500 KB small-file guard
+ * for legitimately tiny artifacts (the AR frontend GRAPH is 23 KB — its
+ * weights ship separately; the Dockerfile sha256s are the real integrity pin).
+ */
 const ARTIFACTS = [
   // EN slot 1 — moonshine-ai/moonshine-streaming onnx/tiny (MIT; stateful .ort)
   ["streaming-tiny-en", "frontend.ort", "https://huggingface.co/moonshine-ai/moonshine-streaming/resolve/main/onnx/tiny/frontend.ort", 7.9],
@@ -29,7 +34,19 @@ const ARTIFACTS = [
   ["streaming-tiny-en", "adapter.ort", "https://huggingface.co/moonshine-ai/moonshine-streaming/resolve/main/onnx/tiny/adapter.ort", 5.0],
   ["streaming-tiny-en", "cross_kv.ort", "https://huggingface.co/moonshine-ai/moonshine-streaming/resolve/main/onnx/tiny/cross_kv.ort", 1.2],
   ["streaming-tiny-en", "decoder_kv.ort", "https://huggingface.co/moonshine-ai/moonshine-streaming/resolve/main/onnx/tiny/decoder_kv.ort", 90.9],
-  // AR slot 1 — onnx-community/moonshine-tiny-ar-ONNX int8 (license "other":
+  // AR slot 1 (runner/server) — OFFICIAL Useful Sensors artifacts on
+  // download.moonshine.ai (quantized_26_08_24): decode long clips cleanly
+  // where every HF-checkpoint export looped past ~2 s. Moonshine Community
+  // License — fetch/bake only, never npm-redistribute. The frontend ships as
+  // graph + weights pair (bindFrontendWeights in shared/decode.ts).
+  ["streaming-tiny-ar", "frontend.model.ort", "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/frontend.model.ort", 0.022, 20_000],
+  ["streaming-tiny-ar", "frontend.weights.ort", "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/frontend.weights.ort", 2.0],
+  ["streaming-tiny-ar", "encoder.ort", "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/encoder.ort", 7.4],
+  ["streaming-tiny-ar", "adapter.ort", "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/adapter.ort", 1.3],
+  ["streaming-tiny-ar", "cross_kv.ort", "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/cross_kv.ort", 1.2],
+  ["streaming-tiny-ar", "decoder_kv.ort", "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/decoder_kv.ort", 18.8],
+  // AR slot 1 in the BROWSER engine only (CDN has no CORS) + explicit-choice
+  // fallback — onnx-community/moonshine-tiny-ar-ONNX int8 (license "other":
   // fetch/bake freely, never npm-redistribute — noted in shared/models.ts)
   ["batch-tiny-ar", "encoder_model_int8.onnx", "https://huggingface.co/onnx-community/moonshine-tiny-ar-ONNX/resolve/main/onnx/encoder_model_int8.onnx", 7.6],
   ["batch-tiny-ar", "decoder_model_merged_int8.onnx", "https://huggingface.co/onnx-community/moonshine-tiny-ar-ONNX/resolve/main/onnx/decoder_model_merged_int8.onnx", 19.4],
@@ -45,6 +62,8 @@ for (const [dir] of ARTIFACTS) mkdirSync(resolve(MODELS_DIR, dir), { recursive: 
 for (const sidecar of [
   "streaming-tiny-en/tokenizer.json",
   "streaming-tiny-en/streaming_config.json",
+  "streaming-tiny-ar/tokenizer.json",
+  "streaming-tiny-ar/streaming_config.json",
   "batch-tiny-ar/tokenizer.json",
   "batch-base-en/tokenizer.json",
 ]) {
@@ -54,10 +73,10 @@ for (const sidecar of [
 }
 
 let total = 0;
-for (const [dir, name, url, expectedMiB] of ARTIFACTS) {
+for (const [dir, name, url, expectedMiB, minBytes = 500_000] of ARTIFACTS) {
   const dest = resolve(MODELS_DIR, dir, name);
   const cached = existsSync(dest) ? readFileSync(dest) : null;
-  if (cached && cached.length >= 500_000) {
+  if (cached && cached.length >= minBytes) {
     // Resumable: a previously fetched binary is hashed as-is (the Dockerfile
     // pins these hashes, so a mismatched local copy fails the image build).
     total += cached.length;
@@ -69,8 +88,9 @@ for (const [dir, name, url, expectedMiB] of ARTIFACTS) {
   if (!res.ok) throw new Error(`fetch ${url} → HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
   // Size guard against a proxy/HTML error page saved as a model: every binary
-  // here is ≥ 1 MB (cross_kv.ort, the smallest, is ~1.26 MB).
-  if (buf.length < 500_000) throw new Error(`${name}: suspiciously small (${buf.length}B) — aborting`);
+  // here is ≥ 1 MB except the AR frontend GRAPH (23 KB — weights ship next to
+  // it; its per-row minBytes catches a truncated/error-page download).
+  if (buf.length < minBytes) throw new Error(`${name}: suspiciously small (${buf.length}B) — aborting`);
   const mib = buf.length / 1024 / 1024;
   if (expectedMiB && Math.abs(mib - expectedMiB) / expectedMiB > 0.25) {
     throw new Error(`${name}: ${mib.toFixed(1)} MiB deviates >25% from the expected ${expectedMiB} — upstream artifact changed?`);

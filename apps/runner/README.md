@@ -126,7 +126,7 @@ POST the WAV. Anything else → `422` naming the contract.
 |---|---|---|
 | `text` | string | Transcript. Empty string + warnings = honest no-speech |
 | `language` | string | `"en"` \| `"ar"` |
-| `engine` | string | Model id that produced the text (`moonshine-streaming-tiny-en`, `moonshine-batch-tiny-ar`, `moonshine-batch-base-en`) or `stt-gateway` |
+| `engine` | string | Model id that produced the text (`moonshine-streaming-tiny-en`, `moonshine-streaming-tiny-ar`, `moonshine-batch-tiny-ar`, `moonshine-batch-base-en`) or `stt-gateway` |
 | `confidence` | number \| null | Local mean per-token probability (floors: 0.55 uncalibrated); `null` when the external gateway produced the text |
 | `warnings` | string[] | Every escalation hop that didn't clear its floor, and the best-effort note if nothing did |
 | `duration_ms` | number | Server-side wall time |
@@ -216,7 +216,9 @@ docker run -e PARSE_RUNNER_API_KEY=... -p 3000:3000 liteparse-runner
 
 The image fetches sha256-pinned models at build (see the `models` stage —
 pins printed by `npm run fetch-models` / `npm run fetch-moonshine-models`; the
-Moonshine set is ~199 MB on top of PP-OCR's ~15 MB). `file:../..` is installed
+Moonshine set is ~231 MB on top of PP-OCR's ~15 MB; the AR streaming slot is
+the official Useful Sensors artifacts under the Moonshine Community License —
+fetch/bake only, never npm-redistributed). `file:../..` is installed
 as a packed tarball, not a symlink, so the runtime tree is self-contained.
 
 ## Environment

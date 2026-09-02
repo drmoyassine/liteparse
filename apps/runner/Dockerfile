@@ -20,7 +20,8 @@
 # scripts/fetch-moonshine-models.mjs (which print them). The OCR det URL is NOT
 # the one the browser uses — its original mirror went 401 upstream (2026-08);
 # see src/engines/rapidocr/model-origin-hf.ts for history. Moonshine licenses:
-# streaming EN + base EN are MIT; AR batch is license "other" (fetch/bake OK,
+# streaming EN + base EN are MIT; AR streaming (official Useful Sensors CDN) is
+# Moonshine Community License; AR batch is license "other" (fetch/bake OK,
 # never npm-redistribute — noted in src/engines/moonshine/shared/models.ts).
 # Download via node itself — debian slim ships no curl/wget.
 FROM node:22-slim AS models
@@ -60,7 +61,32 @@ const ARTIFACTS = [
   ["moonshine/streaming-tiny-en", "decoder_kv.ort",
    "b263a0be74f74d5279b6087a9663d9220d0304de35b13ad981ac89f7aaa653e9",
    "https://huggingface.co/moonshine-ai/moonshine-streaming/resolve/main/onnx/tiny/decoder_kv.ort"],
-  // ── Moonshine tiny AR int8 (slot 1) — onnx-community, license "other" ──
+  // ── Moonshine streaming tiny AR (slot 1) — OFFICIAL Useful Sensors artifacts,
+  //    download.moonshine.ai, Moonshine Community License (fetch/bake only,
+  //    never npm-redistribute). quantized_26_08_24: decodes long clips cleanly
+  //    where every HF-checkpoint export looped past ~2 s (spike 2026-09-02).
+  //    Frontend ships as graph + weights pair (bindFrontendWeights). ──
+  ["moonshine/streaming-tiny-ar", "frontend.model.ort",
+   "04c552e66efe3f7206d0a69779864f93bf3cfaf2fa595c9ce5101c8e3854a414",
+   "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/frontend.model.ort",
+   20_000],
+  ["moonshine/streaming-tiny-ar", "frontend.weights.ort",
+   "6cc4d70efffe757452996574d11065e7dac6a7ff0a9be3e2fec1d0266b062b0e",
+   "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/frontend.weights.ort"],
+  ["moonshine/streaming-tiny-ar", "encoder.ort",
+   "6785ca9932d59265375249a8f3bc62f8333fb4dee6ab7db8dfd6f1daef66f59e",
+   "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/encoder.ort"],
+  ["moonshine/streaming-tiny-ar", "adapter.ort",
+   "9c1278a338b4ff268fc5741be01446d56ca9cba9ff5f4a75c5e1b2c2e2739361",
+   "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/adapter.ort"],
+  ["moonshine/streaming-tiny-ar", "cross_kv.ort",
+   "e317af289233894f49da429d4561150c2f61ca86c1b9ca91c6edd3fb4fdeecb5",
+   "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/cross_kv.ort"],
+  ["moonshine/streaming-tiny-ar", "decoder_kv.ort",
+   "5c9a2bf2d9fc543fd4596b3ab4ab8d09f791aac5682eb1379fd8d59e34237db0",
+   "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/decoder_kv.ort"],
+  // ── Moonshine tiny AR int8 (browser-engine default; explicit-choice fallback)
+  //    — onnx-community, license "other" ──
   ["moonshine/batch-tiny-ar", "encoder_model_int8.onnx",
    "189c63a96dbedcbce32987ccb2ef52367b5392744fdc9b05f3d5442b0db4e85f",
    "https://huggingface.co/onnx-community/moonshine-tiny-ar-ONNX/resolve/main/onnx/encoder_model_int8.onnx"],
@@ -76,11 +102,14 @@ const ARTIFACTS = [
    "https://huggingface.co/onnx-community/moonshine-base-ONNX/resolve/main/onnx/decoder_model_merged_int8.onnx"],
 ];
 (async () => {
-  for (const [dir, name, sha256, url] of ARTIFACTS) {
+  for (const [dir, name, sha256, url, minBytes = 500_000] of ARTIFACTS) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
     const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length < 500_000) throw new Error(`${name}: suspiciously small (${buf.length}B)`);
+    // Early clear error on an error-page body; the sha256 pin below is the
+    // real integrity check (minBytes has one override: the AR frontend GRAPH
+    // is legitimately 23 KB — its weights ship next to it).
+    if (buf.length < minBytes) throw new Error(`${name}: suspiciously small (${buf.length}B)`);
     const got = createHash("sha256").update(buf).digest("hex");
     if (got !== sha256) throw new Error(`${name}: sha256 ${got} != ${sha256}`);
     writeFileSync(`/models/${dir}/${name}`, buf);
@@ -121,8 +150,9 @@ EOF
 # ── Stage 3: runtime ──────────────────────────────────────────────────────────
 FROM node:22-slim AS runtime
 WORKDIR /app
-# The Moonshine set is ~199 MB (streaming EN fp32 .ort + AR/base int8 .onnx) on
-# top of PP-OCR's ~15 MB — cold start pays session LOAD, not download.
+# The Moonshine set is ~231 MB (streaming EN fp32 .ort + streaming AR official
+# int8 .ort + AR/base batch int8 .onnx) on top of PP-OCR's ~15 MB — cold start
+# pays session LOAD, not download.
 ENV NODE_ENV=production \
     PORT=3000 \
     RAPIDOCR_MODEL_PATH=/app/models/rapidocr \

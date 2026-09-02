@@ -40,15 +40,34 @@ describe("moonshineDescriptor", () => {
 });
 
 describe("toMoonshineUrl", () => {
-  it("maps every binary role of every model to its HF resolve URL", () => {
+  it("maps every binary role of every model to its source URL", () => {
     for (const desc of Object.values(MOONSHINE_MODELS)) {
       for (const [role, f] of Object.entries(desc.files)) {
         if (role === "tokenizer" || role === "streamingConfig") continue;
+        // Per-file absolute override (the official AR streaming CDN) wins;
+        // everything else is the descriptor repo's HF resolve URL.
         expect(toMoonshineUrl(moonshineDescriptor(desc, role))).toBe(
-          `https://huggingface.co/${desc.repo}/resolve/main/${f.repoPath}`,
+          f.url ?? `https://huggingface.co/${desc.repo}/resolve/main/${f.repoPath}`,
         );
       }
     }
+  });
+
+  it("routes the AR streaming binaries to the official CDN", () => {
+    const ar = MOONSHINE_MODELS["moonshine-streaming-tiny-ar"]!;
+    expect(toMoonshineUrl(moonshineDescriptor(ar, "frontend"))).toBe(
+      "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/frontend.model.ort",
+    );
+    expect(toMoonshineUrl(moonshineDescriptor(ar, "frontendWeights"))).toBe(
+      "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/frontend.weights.ort",
+    );
+    expect(toMoonshineUrl(moonshineDescriptor(ar, "decoderKv"))).toBe(
+      "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/decoder_kv.ort",
+    );
+    // ...while the tokenizer sidecar stays same-origin like every other model.
+    expect(toMoonshineUrl(moonshineDescriptor(ar, "tokenizer"))).toBe(
+      `${ORIGIN}/models/moonshine/streaming-tiny-ar/tokenizer.json`,
+    );
   });
 
   it("serves tokenizer + streaming-config same-origin (pinned decode tables)", () => {

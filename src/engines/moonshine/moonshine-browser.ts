@@ -21,6 +21,8 @@
  *    only stronger leg is external.
  *  - a per-model LRU caps resident sessions (default 2: EN streaming + AR batch
  *    ≈ 139 MB of weights — beside the OCR pair that IS the memory pressure case).
+ *    Forcing the AR streaming model instead of batch AR adds ~32 MB (and needs
+ *    the files mirrored same-origin — see BROWSER_DEFAULT_STT_MODEL).
  */
 
 // Load the WASM-ONLY (non-jsep) build LAZILY — same reasoning as the OCR runner:
@@ -63,6 +65,7 @@ import { parseWavPcm16, WavError } from "./shared/wav.js";
 import { loadTokenizer, stripTashkeel, type Tokenizer } from "./shared/tokens.js";
 import { sttFloorFor, tokenConfidence } from "./shared/confidence.js";
 import {
+  BROWSER_DEFAULT_STT_MODEL,
   MOONSHINE_MODELS,
   resolveModelId,
   type MoonshineModelId,
@@ -70,6 +73,7 @@ import {
   type StreamingConfig,
 } from "./shared/models.js";
 import {
+  bindFrontendWeights,
   decodeBatch,
   decodeStreaming,
   type BatchDecodeModel,
@@ -143,7 +147,9 @@ export class MoonshineRunner {
     const t0 = performance.now();
 
     const language: SttLanguage = topts.language ?? this.opts.language ?? "en";
-    const modelId = resolveModelId(this.opts.model, language);
+    // Browser defaults (BROWSER map): AR stays batch — the official streaming
+    // CDN sends no CORS headers, so a tab can't fetch those graphs from source.
+    const modelId = resolveModelId(this.opts.model, language, BROWSER_DEFAULT_STT_MODEL);
     const loaded = await this.ensureModel(modelId);
 
     const audio = await this.audioIn(bytes);
@@ -191,12 +197,12 @@ export class MoonshineRunner {
 
   /** Preload a language's slot-1 model (mic-intent / app-start warm-up). */
   async warm(language: SttLanguage = "en"): Promise<void> {
-    await this.ensureModel(resolveModelId(this.opts.model, language));
+    await this.ensureModel(resolveModelId(this.opts.model, language, BROWSER_DEFAULT_STT_MODEL));
   }
 
   /** True once a model for `language` is resident (post-warm check). */
   hasModel(language: SttLanguage): boolean {
-    return this.models.has(resolveModelId(this.opts.model, language));
+    return this.models.has(resolveModelId(this.opts.model, language, BROWSER_DEFAULT_STT_MODEL));
   }
 
   /** Release every resident model's sessions (keeps the IndexedDB cache). */
@@ -278,14 +284,31 @@ export class MoonshineRunner {
       if (!cfg.frontend_state_shapes || !cfg.depth || !cfg.nheads || !cfg.head_dim) {
         throw new Error(`streaming_config.json for ${desc.id} lacks the expected geometry fields`);
       }
-      const [frontend, encoder, adapter, crossKv, decoderKv] = await Promise.all([
+      const [frontendSession, frontendWeights, encoder, adapter, crossKv, decoderKv] = await Promise.all([
         create("frontend"),
+        // AR official set only (desc.files.frontendWeights): the weights blob.
+        bytes.has("frontendWeights") ? create("frontendWeights") : undefined,
         create("encoder"),
         create("adapter"),
         create("crossKv"),
         create("decoderKv"),
       ]);
-      const model: StreamingDecodeModel = { kind: "streaming", desc, cfg, tensor, frontend, encoder, adapter, crossKv, decoderKv };
+      // Weighted frontends (AR): run the blob once, merge into every frontend call.
+      const frontend = frontendWeights
+        ? await bindFrontendWeights(frontendSession, frontendWeights)
+        : frontendSession;
+      const model: StreamingDecodeModel = {
+        kind: "streaming",
+        desc,
+        cfg,
+        tensor,
+        frontend,
+        frontendSessions: frontendWeights ? [frontendSession, frontendWeights] : undefined,
+        encoder,
+        adapter,
+        crossKv,
+        decoderKv,
+      };
       dbg(`[moonshine-browser] loaded ${desc.id} (${((performance.now() - tInit) / 1000).toFixed(1)}s, ${this.models.size + 1}/${this.maxLoaded} resident)`);
       return { modelId, model, tokenizer };
     }
@@ -394,8 +417,16 @@ async function decodeContainerToModelAudio(
 function releaseModel(model: DecodeModel): void {
   // Sessions satisfy the runtime's release(); the decode contract types only
   // what the loops need (run), so reach the host method through a cast.
+  // frontendSessions ?? [frontend]: the AR wrapper is not a session, the raw
+  // pair is listed instead (see StreamingDecodeModel.frontendSessions).
   const sessions = (model.kind === "streaming"
-    ? [model.frontend, model.encoder, model.adapter, model.crossKv, model.decoderKv]
+    ? [
+        ...(model.frontendSessions ?? [model.frontend]),
+        model.encoder,
+        model.adapter,
+        model.crossKv,
+        model.decoderKv,
+      ]
     : [model.encoder, model.decoder]) as unknown as { release?: () => Promise<void> }[];
   for (const s of sessions) void s?.release?.();
 }
@@ -441,8 +472,8 @@ export interface MoonshineSttEngineOptions extends MoonshineBrowserOptions {
  * );
  * ```
  *
- * Dispatches to the slot-1 model per language (`DEFAULT_STT_MODEL`), loads
- * lazily on first use of that language, and LRU-disposes at
+ * Dispatches to the slot-1 model per language (`BROWSER_DEFAULT_STT_MODEL`),
+ * loads lazily on first use of that language, and LRU-disposes at
  * `maxLoadedModels` (default 2). Applies the confidence floor internally
  * (under-yield ⇒ the route's external stt-gateway leg runs).
  */

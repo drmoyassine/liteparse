@@ -23,6 +23,24 @@ export interface DecodeSession {
 }
 
 /**
+ * AR official streaming quirk: `frontend.model.ort` is a bare graph whose three
+ * weight tensors (melspec projection + both conv kernels) are INPUTS, paired
+ * with `frontend.weights.ort` — a blob graph run ONCE whose outputs are those
+ * tensors by name (probed 2026-09-02; EN's frontend is monolithic). Run the
+ * weights session once here and merge its outputs into every frontend call,
+ * so {@link decodeStreaming} stays family-agnostic.
+ */
+export async function bindFrontendWeights(
+  frontend: DecodeSession,
+  weights: DecodeSession,
+): Promise<DecodeSession> {
+  const w = await weights.run({});
+  return {
+    run: (feeds) => frontend.run({ ...feeds, ...w }),
+  };
+}
+
+/**
  * Zero-length/zero-filled tensor constructor bound to the host ort module
  * (`(type, data, dims) => new ort.Tensor(type, data, dims)`).
  */
@@ -36,6 +54,13 @@ export interface StreamingDecodeModel {
   cfg: StreamingConfig;
   tensor: TensorFactory;
   frontend: DecodeSession;
+  /**
+   * RAW frontend sessions for release bookkeeping. Present only when
+   * {@link bindFrontendWeights} wrapped the graph (AR official artifacts) —
+   * the wrapper hides the real session inside `frontend`. Engines release
+   * `frontendSessions ?? [frontend]`.
+   */
+  frontendSessions?: DecodeSession[];
   encoder: DecodeSession;
   adapter: DecodeSession;
   crossKv: DecodeSession;

@@ -73,7 +73,8 @@ function fakeOrigin(): ModelOrigin & { served: string[] } {
       served.push(d.id);
       const role = d.id.slice(d.id.indexOf("/") + 1);
       if (role === "tokenizer") {
-        return new TextEncoder().encode(d.id.startsWith("moonshine-batch-tiny-ar") ? AR_TOKENIZER : EN_TOKENIZER);
+        const ar = d.id.startsWith("moonshine-batch-tiny-ar") || d.id.startsWith("moonshine-streaming-tiny-ar");
+        return new TextEncoder().encode(ar ? AR_TOKENIZER : EN_TOKENIZER);
       }
       if (role === "streamingConfig") return new TextEncoder().encode(STREAMING_CFG);
       return new TextEncoder().encode(role); // binary marker: create() reads it back
@@ -117,6 +118,13 @@ function mockOrtFactory(script: Script = {}) {
       switch (tag) {
         case "frontend":
           outputs.features = T([1, 5, 320]);
+          break;
+        case "frontendWeights":
+          // AR official artifacts: blob graph whose OUTPUTS are the frontend
+          // graph's weight INPUTS, matched by name (bindFrontendWeights merges).
+          outputs["onnx::MatMul_124_add_tensor_add_tensor"] = T([80, 320]);
+          outputs["onnx::Conv_127_add_tensor_add_tensor"] = T([640, 320, 5]);
+          outputs["onnx::Conv_134_add_tensor_add_tensor"] = T([320, 640, 5]);
           break;
         case "encoder":
           // Streaming encoder (features in) and batch encoder (input_values in)
@@ -250,7 +258,7 @@ describe("createMoonshineSttEngine — EN streaming family", () => {
   });
 });
 
-describe("createMoonshineSttEngine — AR batch family", () => {
+describe("createMoonshineSttEngine — AR batch family (the BROWSER default)", () => {
   it("runs the merged-decoder flow and strips tashkeel by default", async () => {
     const { mod, ort } = await freshModule();
     const engine = mod.createMoonshineSttEngine({ debug: false, modelOrigin: fakeOrigin() });
@@ -289,6 +297,40 @@ describe("createMoonshineSttEngine — AR batch family", () => {
     });
     const result = await engine.transcribe(testWav(), { language: "ar" });
     expect(result.text).toBe("مُحَمَّد");
+  });
+});
+
+describe("createMoonshineSttEngine — AR streaming family (forced model)", () => {
+  it("binds the frontend weights pair and decodes through the streaming chain", async () => {
+    // The browser DEFAULT stays batch AR (the official CDN sends no CORS
+    // headers — BROWSER_DEFAULT_STT_MODEL); forcing the streaming id is the
+    // documented path for consumers who mirror the files under their origin.
+    const origin = fakeOrigin();
+    const { mod, ort } = await freshModule({ streamingTokens: [20, 2] });
+    const engine = mod.createMoonshineSttEngine({
+      debug: false,
+      modelOrigin: origin,
+      model: "moonshine-streaming-tiny-ar",
+    });
+
+    const result = await engine.transcribe(testWav(), { language: "ar" });
+    expect(result.text).toBe("محمد");
+    expect(result.language).toBe("ar");
+
+    expect(ort.created).toContain("frontend");
+    expect(ort.created).toContain("frontendWeights");
+    expect(ort.created).not.toContain("decoder");
+    // Every role (weights pair included) came through the origin.
+    for (const role of Object.keys(MOONSHINE_MODELS["moonshine-streaming-tiny-ar"]!.files)) {
+      expect(origin.served).toContain(`moonshine-streaming-tiny-ar/${role}`);
+    }
+    // Weights blob run ONCE at bind; outputs threaded into the frontend by name.
+    const weightRuns = ort.runs.filter((r) => r.tag === "frontendWeights");
+    expect(weightRuns).toHaveLength(1);
+    const frontend = ort.runs.find((r) => r.tag === "frontend")!;
+    expect(frontend.feeds["onnx::MatMul_124_add_tensor_add_tensor"]).toBe(
+      weightRuns[0]!.outputs["onnx::MatMul_124_add_tensor_add_tensor"],
+    );
   });
 });
 

@@ -22,6 +22,7 @@ import {
   type StreamingConfig,
 } from "../engines/moonshine/shared/models.js";
 import {
+  bindFrontendWeights,
   decodeBatch,
   decodeStreaming,
   type BatchDecodeModel,
@@ -39,17 +40,22 @@ import {
  *
  * Two artifact families (spike-verified 2026-09-01, geometry in shared/models.ts):
  *
- *   streaming (EN slot 1) — five stateful `.ort` graphs, one-shot whole-clip:
+ *   streaming (EN slot 1, AR slot 1) — five stateful `.ort` graphs, one-shot
+ *   whole-clip:
  *     frontend(audio_chunk + state) → features[1,T/320,320]
  *     → encoder(features) → encoded
  *     → adapter(encoded, pos_offset) → memory
  *     → cross_kv(memory) → k/v_cross [depth,1,heads,T,headDim]  (layer-major)
- *     → decoder_kv(token[1,1], k/v_self [depth,1,heads,t,headDim]) → logits[1,1,32768]
+ *     → decoder_kv(token[1,1], k/v_self [depth,1,heads,t,headDim]) → logits[1,1,vocab]
+ *   AR additionally ships its frontend as graph + weights pair — the weights
+ *   blob runs once at load and merges into every frontend call
+ *   (bindFrontendWeights in shared/decode.ts).
  *
- *   batch (AR slot 1, EN slot 2) — transformers.js-style int8 pair:
+ *   batch (EN slot 2; AR slot 1 in the BROWSER engine only) — transformers.js-
+ *   style int8 pair:
  *     encoder(input_values = RAW waveform) → last_hidden_state[1,T,hidden]
  *     → decoder_merged(input_ids[1,1], past_key_values.* [1,heads,t,headDim],
- *                      use_cache_branch) → logits[1,1,32768] + present.*
+ *                      use_cache_branch) → logits[1,1,vocab] + present.*
  *
  * Both decoders expose logits, so confidence is the greedy pick's per-token
  * probability (shared/confidence.ts). The engine reports HONEST confidence and
@@ -62,6 +68,9 @@ import {
  * Model layout (MOONSHINE_MODEL_PATH, default ./models/moonshine):
  *   streaming-tiny-en/{frontend,encoder,adapter,cross_kv,decoder_kv}.ort
  *     + tokenizer.json + streaming_config.json
+ *   streaming-tiny-ar/{frontend.model,frontend.weights,encoder,adapter,cross_kv,
+ *     decoder_kv}.ort + tokenizer.json + streaming_config.json
+ *     (official Useful Sensors artifacts — Moonshine Community License)
  *   batch-tiny-ar/{encoder_model_int8,decoder_model_merged_int8}.onnx + tokenizer.json
  *   batch-base-en/{encoder_model_int8,decoder_model_merged_int8}.onnx + tokenizer.json
  */
@@ -243,14 +252,32 @@ async function loadModel(server: MoonshineServer, desc: MoonshineModelDescriptor
     if (!cfg.frontend_state_shapes || !cfg.depth || !cfg.nheads || !cfg.head_dim) {
       throw new Error(`streaming_config.json for ${desc.id} lacks the expected geometry fields`);
     }
-    const [frontend, encoder, adapter, crossKv, decoderKv] = await Promise.all([
+    const [frontendSession, frontendWeights, encoder, adapter, crossKv, decoderKv] = await Promise.all([
       create(paths.frontend!),
+      // Only the AR official set ships the weights pair; undefined otherwise.
+      paths.frontendWeights ? create(paths.frontendWeights) : undefined,
       create(paths.encoder!),
       create(paths.adapter!),
       create(paths.crossKv!),
       create(paths.decoderKv!),
     ]);
-    const model: StreamingModel = { kind: "streaming", desc, tokenizer, cfg, tensor, frontend, encoder, adapter, crossKv, decoderKv };
+    // Weighted frontends (AR): run the blob once, merge into every frontend call.
+    const frontend = frontendWeights
+      ? await bindFrontendWeights(frontendSession, frontendWeights)
+      : frontendSession;
+    const model: StreamingModel = {
+      kind: "streaming",
+      desc,
+      tokenizer,
+      cfg,
+      tensor,
+      frontend,
+      frontendSessions: frontendWeights ? [frontendSession, frontendWeights] : undefined,
+      encoder,
+      adapter,
+      crossKv,
+      decoderKv,
+    };
     dbg(`[moonshine-server] loaded ${desc.id} (${((performance.now() - tInit) / 1000).toFixed(1)}s, ${dir})`);
     return model;
   }
@@ -264,9 +291,17 @@ async function loadModel(server: MoonshineServer, desc: MoonshineModelDescriptor
 function releaseModel(model: LoadedModel): void {
   // Sessions satisfy the runtime's release(); the decode contract types only
   // what the loops need (run), so reach the host method through a cast.
+  // frontendSessions ?? [frontend]: the AR wrapper is not a session, the raw
+  // pair is listed instead (see StreamingDecodeModel.frontendSessions).
   const sessions: OrtSession[] =
     model.kind === "streaming"
-      ? [model.frontend, model.encoder, model.adapter, model.crossKv, model.decoderKv]
+      ? [
+          ...(model.frontendSessions ?? [model.frontend]),
+          model.encoder,
+          model.adapter,
+          model.crossKv,
+          model.decoderKv,
+        ]
       : [model.encoder, model.decoder];
   for (const s of sessions) void s?.release?.();
 }
@@ -282,8 +317,8 @@ async function loadServer(explicitPath?: string): Promise<MoonshineServer> {
   if (!root) {
     throw new Error(
       "Moonshine models not found. Set MOONSHINE_MODEL_PATH or place models under ./models/moonshine " +
-        "(expected subdirs: streaming-tiny-en, batch-tiny-ar, batch-base-en — fetch via " +
-        "apps/runner/scripts/fetch-moonshine-models.mjs)",
+        "(expected subdirs: streaming-tiny-en, streaming-tiny-ar, batch-tiny-ar, batch-base-en — " +
+        "fetch via apps/runner/scripts/fetch-moonshine-models.mjs)",
     );
   }
   return { ort, root, models: new Map(), loading: new Map() };

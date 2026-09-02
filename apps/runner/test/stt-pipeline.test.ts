@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSttService } from "../src/stt-service.js";
@@ -9,7 +9,9 @@ import { DEFAULT_STT_MODEL, ESCALATION_STT_MODEL } from "@drmoyassine/liteparse"
  * The REAL STT end-to-end proof: genuine Moonshine artifacts through the
  * escalation service (and the full HTTP surface). Sine-wave input can't assert
  * transcript content — it asserts the WALK: which slots ran, honest confidence,
- * the 422 contract, and the exact response key set.
+ * the 422 contract, and the exact response key set. The AR slot also gets a
+ * committed 16 kHz speech fixture (fixtures/ar-speech.wav, MS TTS) so its
+ * transcript CONTENT is asserted too.
  *
  * Skipped unless apps/runner/models/moonshine/streaming-tiny-en exists — run
  * `npm run fetch-moonshine-models` first (CI never downloads).
@@ -45,16 +47,6 @@ function sineWav(seconds: number, freq = 440): Uint8Array {
 }
 
 describe.skipIf(!existsSync(resolve(MODELS, "streaming-tiny-en")))("STT pipeline (real models)", { timeout: 180_000 }, () => {
-  it("runs the AR slot-1 model and reports honest confidence", async () => {
-    const service = createSttService({});
-    const result = await service.transcribe(sineWav(1.0), "ar-sine.wav", { language: "ar" }, undefined);
-    expect(result.language).toBe("ar");
-    expect(result.engine).toBe(DEFAULT_STT_MODEL.ar);
-    expect(typeof result.text).toBe("string");
-    expect(result.confidence).not.toBeNull();
-    expect(result.confidence!).toBeGreaterThan(0);
-    expect(result.confidence!).toBeLessThanOrEqual(1);
-  });
 
   it("walks EN slots on a non-speech stimulus (sine → no confident transcript)", async () => {
     const service = createSttService({});
@@ -122,3 +114,29 @@ describe.skipIf(!existsSync(resolve(MODELS, "streaming-tiny-en")))("STT pipeline
     );
   });
 });
+
+// Own gate: only the AR streaming slot needs this fixture, and EN-only
+// checkouts (no AR artifacts fetched) still run the suite above.
+describe.skipIf(!existsSync(resolve(MODELS, "streaming-tiny-ar")))(
+  "STT pipeline — AR speech content (real models)",
+  { timeout: 180_000 },
+  () => {
+    it("transcribes real Arabic speech at slot 1 with honest confidence", async () => {
+      const service = createSttService({});
+      const bytes = new Uint8Array(readFileSync(resolve(HERE, "fixtures", "ar-speech.wav")));
+      const result = await service.transcribe(bytes, "ar-speech.wav", { language: "ar" }, undefined);
+      expect(result.language).toBe("ar");
+      // Slot 1 = the official streaming artifacts; content is assertable on
+      // speech (the sine stimulus could never do this).
+      expect(result.engine).toBe(DEFAULT_STT_MODEL.ar);
+      // Anchor on one reliably-decoded word, not the full sentence: TTS
+      // fixture + tiny-model ASR vary at the edges (measured: "مراحبا بكم في
+      // الاخت" for "مرحبا بكم في الاختبار") — the point is real transcript
+      // CONTENT, not exactness.
+      expect(result.text).toContain("بكم");
+      expect(result.confidence).not.toBeNull();
+      expect(result.confidence!).toBeGreaterThan(0.5);
+      expect(result.confidence!).toBeLessThanOrEqual(1);
+    });
+  },
+);
