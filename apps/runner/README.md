@@ -140,12 +140,22 @@ PCM16 — the message names the contract), `503` (slots full / no local model
 STT decode can 503 a parse and vice versa; `RUNNER_MAX_CONCURRENCY` (default 2)
 sizes both.
 
+### `GET /docs` + `GET /openapi.json`
+
+Unauthenticated like `/health`: `/docs` renders the **Swagger UI** for this
+exact API (assets bundled in the image — works on a network-isolated box), with
+*try it out* against the live server (type your `X-API-Key` in the Authorize
+dialog; it is never baked into the spec). `/openapi.json` is the machine-readable
+**OpenAPI 3.1** document — import it straight into Postman, Insomnia, Bruno, or
+an n8n HTTP Request node. Both are generated from a hand-maintained spec that
+mirrors this README (`src/openapi.ts`).
+
 ### `GET /health`
 
 Unauthenticated (uptime probes):
 
 ```json
-{ "ok": true, "version": "0.2.3", "uptime_s": 3600, "ocr": "ready", "stt": "ready" }
+{ "ok": true, "version": "0.3.0", "uptime_s": 3600, "ocr": "ready", "stt": "ready" }
 ```
 
 `ocr: "unavailable"` means models failed to load — parses still work for
@@ -239,6 +249,7 @@ as a packed tarball, not a symlink, so the runtime tree is self-contained.
 ## Tests
 
 - `test/app.test.ts` — hermetic HTTP contract (auth, validation, limits, redaction)
+- `test/docs.test.ts` — hermetic /docs + /openapi.json (unauthenticated, version wiring, documented-code drift guard)
 - `test/transcribe.test.ts` — hermetic `/transcribe` HTTP ladder + response key set
 - `test/stt-service.test.ts` — hermetic escalation walk (fake engines, stubbed gateway fetch)
 - `test/options.test.ts` — request→ParseOptions mapping + clamps (pure)

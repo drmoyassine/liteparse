@@ -1,7 +1,7 @@
 {
   "name": "@drmoyassine/liteparse/runner",
   "private": true,
-  "version": "0.2.3",
+  "version": "0.3.0",
   "type": "module",
   "description": "Self-hosted parse runner — Hono HTTP service exposing liteparse with browser-parity OCR (sharp raster + onnxruntime-node RapidOCR + VLM fallback) and local STT (Moonshine EN/AR + gateway escalation).",
   "engines": {
@@ -17,12 +17,13 @@
     "make-fixture": "node scripts/make-ocr-fixture.mjs"
   },
   "dependencies": {
+    "@drmoyassine/liteparse": "file:../..",
     "@hono/node-server": "^1.14.0",
+    "@hono/swagger-ui": "^0.6.1",
     "@napi-rs/canvas": "^0.1.80",
     "canvas": "^3.1.0",
     "dommatrix": "^1.0.3",
     "hono": "^4.7.0",
-    "@drmoyassine/liteparse": "file:../..",
     "onnxruntime-node": "^1.22.0",
     "pdfjs-dist": "^4.8.0",
     "sharp": "^0.34.0"

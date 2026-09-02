@@ -1,11 +1,13 @@
 import { Hono } from "hono";
 import type { Context, Next } from "hono";
+import { swaggerUI } from "@hono/swagger-ui";
 import { createApiKeyAuth } from "./auth.js";
 import { createHealthHandler } from "./handlers/health.js";
 import { createParseHandler } from "./handlers/parse.js";
 import { createTranscribeHandler } from "./handlers/transcribe.js";
 import type { Semaphore } from "./limits.js";
 import { createSemaphore } from "./limits.js";
+import { createOpenApiDocument } from "./openapi.js";
 import type { ParseService } from "./service.js";
 import type { SttService } from "./stt-service.js";
 
@@ -49,6 +51,13 @@ export function createApp(deps: AppDeps): Hono {
     ocrReady: deps.ocrReady,
     sttReady: deps.sttReady,
   }));
+
+  // /docs + /openapi.json: unauthenticated too — the API shape is public in the
+  // repo README, and Swagger UI's try-it-out needs the key typed by the human
+  // looking at the page (never baked into the spec). UI assets ship IN the image
+  // (@hono/swagger-ui), so docs render on a network-isolated box.
+  app.get("/openapi.json", (c) => c.json(createOpenApiDocument(deps.version)));
+  app.get("/docs", swaggerUI({ url: "/openapi.json" }));
 
   // Everything else requires the shared key. NO CORS anywhere — server-to-server
   // only; a browser must never hold this key.
