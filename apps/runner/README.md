@@ -145,7 +145,7 @@ sizes both.
 Unauthenticated (uptime probes):
 
 ```json
-{ "ok": true, "version": "0.2.0", "uptime_s": 3600, "ocr": "ready", "stt": "ready" }
+{ "ok": true, "version": "0.2.2", "uptime_s": 3600, "ocr": "ready", "stt": "ready" }
 ```
 
 `ocr: "unavailable"` means models failed to load — parses still work for

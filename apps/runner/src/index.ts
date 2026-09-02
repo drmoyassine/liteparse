@@ -14,7 +14,7 @@ import { createSttService } from "./stt-service.js";
 
 // Keep in sync with apps/runner/package.json (not imported — bundling JSON into
 // the service bundle isn't worth it for a version string).
-const VERSION = "0.2.1";
+const VERSION = "0.2.2";
 
 async function main(): Promise<void> {
   const config = loadConfig();

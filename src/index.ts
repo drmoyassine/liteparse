@@ -224,4 +224,4 @@ export type { ModelDescriptor, ModelOrigin } from "./worker/model-origin.js";
 
 // Keep in sync with package.json (not read from it — same trade-off as the
 // runner's VERSION in apps/runner/src/index.ts).
-export const VERSION = "0.4.3";
+export const VERSION = "0.4.4";
