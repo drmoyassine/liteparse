@@ -370,6 +370,33 @@ deployed on the existing Easypanel VPS via `apps/runner/Dockerfile`. The tasks b
 multi-tenant product shape this v1 deliberately defers; v1 serves one trusted caller
 (studygram edge functions) synchronously.
 
+**v1 surface backlog** (sync, one-trusted-caller scope — sized for the current
+runner, not the multi-tenant shape below; each ships with README + `/openapi.json`
++ the docs drift tests updated in the same commit):
+- [ ] **File-by-URL input:** `url` as an alternative to `data` in `/parse` and
+      `/transcribe` bodies (exactly one of the two → `400` otherwise). The runner
+      fetches the file server-side under the SAME rules as an uploaded body:
+      fetch timeout, bounded redirects, and the decoded-size caps enforced on the
+      stream (abort mid-download → `413`, not after). `filename` falls back to the
+      URL's last path segment; the response `Content-Type` joins extension + magic
+      bytes as a classification hint. **SSRF is the real design cost:** the key
+      holder must not be able to point the runner at internal network — https/http
+      schemes only, resolve DNS and check EVERY resolved IP against
+      localhost/`127.0.0.0/8`/RFC1918/link-local (`169.254.169.254` metadata!),
+      re-check on redirect hops; optional `RUNNER_URL_ALLOWLIST` (host-suffix list)
+      as the strict mode. One trusted caller today lowers but does not zero the
+      risk — keys leak. Payoff: no base64 +33% inflation and no
+      download-then-reupload round trip (a Supabase signed URL or Telegram file
+      path posts straight through from n8n/edge).
+- [ ] **Caller-set confidence floor:** `options.confidenceFloor` (number) in
+      `/transcribe` — the gate the escalation walk escalates on, set per request.
+      Clamped semantics: reject out-of-range (`<0`/`>1`) with `400`; omitted =
+      today's behavior exactly (the calibrated floor for the model — `STT_CONFIDENCE_FLOOR`
+      0.55 until stt-lab populates per-model values). A caller value overrides
+      BOTH the default and any per-model floor, and applies at every hop of the
+      walk (slot 1 and slot 2) — one knob, not per-slot. No `/parse` twin: the
+      parse cascade escalates on empty/low yield, not a numeric gate.
+
 **Why:** turns liteparse from a library into a product external services call. Highest
 commercial value; sharpest technical constraints. **Decided: TS-everywhere** — the GPU
 worker is TS + `onnxruntime-node` (+ CUDA EP), Runpod Serverless primary.
