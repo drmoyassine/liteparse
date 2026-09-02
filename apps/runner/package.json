@@ -1,7 +1,7 @@
 {
   "name": "@drmoyassine/liteparse/runner",
   "private": true,
-  "version": "0.2.2",
+  "version": "0.2.3",
   "type": "module",
   "description": "Self-hosted parse runner — Hono HTTP service exposing liteparse with browser-parity OCR (sharp raster + onnxruntime-node RapidOCR + VLM fallback) and local STT (Moonshine EN/AR + gateway escalation).",
   "engines": {
