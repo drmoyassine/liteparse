@@ -4,7 +4,7 @@ Isomorphic document text extraction — one entry point, runs unchanged in the *
 
 Extracts text from PDFs (native + OCR + VLM fallback), Office files (`.docx`/`.xlsx`/`.csv`), and images, behind a single `parseDocument()` call. Platform-specific work (image rasterising, OCR, vision-LLM fallback) is done through **swappable adapters** that are auto-detected per runtime, so the same code parses a digital PDF in Node and a scanned passport in the browser.
 
-> **Status:** `0.4.3` swaps the runner's Arabic slot-1 STT model to the official Moonshine streaming artifacts — 27 s clips decode cleanly (RTF ≈ 0.2) where every HF-checkpoint export looped past ~2 s; the browser engine keeps batch AR (the official CDN serves no CORS headers); `0.4.2` fixes a dictation listener leak (a shared worker delivered each session's text to every past client); `0.4.1` fixes the batch-decoder cross-KV threading (Arabic hallucination loops, base-en deaf decode); `0.4.0` ships the linear OCR cascade (pdfjs native text → RapidOCR → VLM fallback) plus the full speech track — audio as a first-class `parseDocument()` kind, local Moonshine STT (EN/AR, browser + self-hosted runner), and live dictation. See [ARCHITECTURE.md](./ARCHITECTURE.md) and [ROADMAP.md](./ROADMAP.md).
+> **Status:** `0.4.4` flips the BROWSER Arabic default to streaming too — the official artifacts now load from a byte-identical Hugging Face mirror (the official CDN blocks browser fetches), and single-threaded WASM decodes them at RTF ≈ 0.19, same as native; `0.4.3` swaps the runner's Arabic slot-1 STT model to the official Moonshine streaming artifacts — 27 s clips decode cleanly (RTF ≈ 0.2) where every HF-checkpoint export looped past ~2 s; `0.4.2` fixes a dictation listener leak (a shared worker delivered each session's text to every past client); `0.4.1` fixes the batch-decoder cross-KV threading (Arabic hallucination loops, base-en deaf decode); `0.4.0` ships the linear OCR cascade (pdfjs native text → RapidOCR → VLM fallback) plus the full speech track — audio as a first-class `parseDocument()` kind, local Moonshine STT (EN/AR, browser + self-hosted runner), and live dictation. See [ARCHITECTURE.md](./ARCHITECTURE.md) and [ROADMAP.md](./ROADMAP.md).
 
 ## Install
 
@@ -141,7 +141,7 @@ import {
 
 setBrowserSttEngine(
   createMoonshineSttEngine({ modelOrigin: createMoonshineModelOrigin() }),
-); // EN streaming-tiny + AR batch-tiny, ~139 MB, cached in IndexedDB
+); // EN + AR streaming-tiny, ~144 MB, cached in IndexedDB
 
 const stt = createServerSttGateway({
   endpoint: "https://api.openai.com/v1/audio/transcriptions",
@@ -156,9 +156,10 @@ Server-side instead: self-host the [parse runner](./apps/runner) and call
 `POST /transcribe` — same escalation walk, native speed.
 
 **Self-hosted assets (browser, same-origin):** copy `onnxruntime-web`'s wasm
-files to `/ort/` and the Moonshine tokenizer JSONs to `/models/moonshine/`
-(the `.ort` weights download from Hugging Face and cache). No COOP/COEP
-headers required — single-threaded WASM is the no-headers path.
+files to `/ort/` and the Moonshine tokenizer + streaming-config sidecars to
+`/models/moonshine/` (the `.ort` weights download from Hugging Face — AR
+streaming via a byte-identical mirror of the official artifacts — and cache).
+No COOP/COEP headers required — single-threaded WASM is the no-headers path.
 
 **Live dictation** — a separate lightweight client, not the parse worker.
 Host the two bundles as static assets and inject the worker (long-lived —

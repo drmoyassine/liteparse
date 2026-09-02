@@ -70,7 +70,8 @@ import {
  *     + tokenizer.json + streaming_config.json
  *   streaming-tiny-ar/{frontend.model,frontend.weights,encoder,adapter,cross_kv,
  *     decoder_kv}.ort + tokenizer.json + streaming_config.json
- *     (official Useful Sensors artifacts — Moonshine Community License)
+ *     (official Useful Sensors artifacts, MIT — served from the byte-identical
+ *     HF mirror; see engines/moonshine/shared/models.ts)
  *   batch-tiny-ar/{encoder_model_int8,decoder_model_merged_int8}.onnx + tokenizer.json
  *   batch-base-en/{encoder_model_int8,decoder_model_merged_int8}.onnx + tokenizer.json
  */

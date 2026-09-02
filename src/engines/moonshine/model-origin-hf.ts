@@ -16,13 +16,12 @@ import { MOONSHINE_MODELS, fileUrl, type MoonshineModelDescriptor } from "./shar
  * `<origin>/models/moonshine/<dir>/` (the runner fetch script documents the
  * same files). A consumer wanting full pinning injects their own ModelOrigin.
  *
- * AR tiny is license "other", and the AR STREAMING artifacts are Moonshine
- * Community License hosted on download.moonshine.ai (see shared/models.ts):
- * browser download is use, never npm-redistribution — same stance as PP-OCR
- * today. Note the official CDN sends NO CORS headers (probed 2026-09-02), so
- * fetching the streaming AR graphs in a tab only works if the app mirrors
- * them under its own origin — which is why BROWSER_DEFAULT_STT_MODEL keeps
- * AR on the HF-hosted batch model.
+ * AR batch tiny is license "other" (onnx-community), and the AR STREAMING set
+ * is official Useful Sensors output under MIT, fetched from a byte-identical
+ * HF mirror (Drmoyassine/moonshine-streaming-tiny-ar-ort — the official CDN
+ * sends no CORS headers; the mirror is what makes the browser default
+ * possible; see shared/models.ts): browser download is use, never
+ * npm-redistribution — same stance as PP-OCR today.
  */
 
 /**

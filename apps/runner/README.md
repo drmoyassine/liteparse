@@ -217,8 +217,9 @@ docker run -e PARSE_RUNNER_API_KEY=... -p 3000:3000 liteparse-runner
 The image fetches sha256-pinned models at build (see the `models` stage —
 pins printed by `npm run fetch-models` / `npm run fetch-moonshine-models`; the
 Moonshine set is ~231 MB on top of PP-OCR's ~15 MB; the AR streaming slot is
-the official Useful Sensors artifacts under the Moonshine Community License —
-fetch/bake only, never npm-redistributed). `file:../..` is installed
+the official Useful Sensors artifacts — MIT, fetched from our byte-identical
+HF mirror since the official CDN sends no CORS headers; never npm-redistributed
+either way, the npm package stays model-free). `file:../..` is installed
 as a packed tarball, not a symlink, so the runtime tree is self-contained.
 
 ## Environment

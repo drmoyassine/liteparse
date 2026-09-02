@@ -258,10 +258,14 @@ describe("createMoonshineSttEngine — EN streaming family", () => {
   });
 });
 
-describe("createMoonshineSttEngine — AR batch family (the BROWSER default)", () => {
+describe("createMoonshineSttEngine — AR batch family (forced; the browser default is streaming now)", () => {
   it("runs the merged-decoder flow and strips tashkeel by default", async () => {
     const { mod, ort } = await freshModule();
-    const engine = mod.createMoonshineSttEngine({ debug: false, modelOrigin: fakeOrigin() });
+    const engine = mod.createMoonshineSttEngine({
+      debug: false,
+      modelOrigin: fakeOrigin(),
+      model: "moonshine-batch-tiny-ar",
+    });
 
     const result = await engine.transcribe(testWav(), { language: "ar" });
     expect(result.text).toBe("محمد"); // مُحَمَّد minus diacritics
@@ -293,6 +297,7 @@ describe("createMoonshineSttEngine — AR batch family (the BROWSER default)", (
     const engine = mod.createMoonshineSttEngine({
       debug: false,
       modelOrigin: fakeOrigin(),
+      model: "moonshine-batch-tiny-ar",
       keepDiacritics: true,
     });
     const result = await engine.transcribe(testWav(), { language: "ar" });
@@ -300,18 +305,13 @@ describe("createMoonshineSttEngine — AR batch family (the BROWSER default)", (
   });
 });
 
-describe("createMoonshineSttEngine — AR streaming family (forced model)", () => {
+describe("createMoonshineSttEngine — AR streaming family (the BROWSER default)", () => {
   it("binds the frontend weights pair and decodes through the streaming chain", async () => {
-    // The browser DEFAULT stays batch AR (the official CDN sends no CORS
-    // headers — BROWSER_DEFAULT_STT_MODEL); forcing the streaming id is the
-    // documented path for consumers who mirror the files under their origin.
+    // Slot-1 AR default (BROWSER map) = the official streaming artifacts via
+    // the CORS-open HF mirror — no forced model needed anymore.
     const origin = fakeOrigin();
     const { mod, ort } = await freshModule({ streamingTokens: [20, 2] });
-    const engine = mod.createMoonshineSttEngine({
-      debug: false,
-      modelOrigin: origin,
-      model: "moonshine-streaming-tiny-ar",
-    });
+    const engine = mod.createMoonshineSttEngine({ debug: false, modelOrigin: origin });
 
     const result = await engine.transcribe(testWav(), { language: "ar" });
     expect(result.text).toBe("محمد");
@@ -345,19 +345,22 @@ describe("model lifecycle (LRU + dedupe)", () => {
 
     await engine.transcribe(testWav()); // EN streaming loads
     expect(ort.created).toContain("frontend");
-    await engine.transcribe(testWav(), { language: "ar" }); // AR loads → EN evicted
+    await engine.transcribe(testWav(), { language: "ar" }); // AR streaming loads → EN evicted
     expect(ort.released).toContain("frontend");
     // Residency is observed through the ort session tags (the public engine
-    // handle deliberately exposes only transcribe/warm/dispose): AR's batch
-    // pair was created exactly once, EN's five sessions are gone.
+    // handle deliberately exposes only transcribe/warm/dispose): AR's six
+    // sessions (weights pair included) were created, EN's five are gone.
 
-    // Re-visiting EN re-creates its sessions (AR evicted this time). "decoder"
-    // is the BATCH-only tag — EN streaming releases a "decoderKv", so its
-    // presence proves the AR pair was the evicted one.
+    // Re-visiting EN re-creates its sessions (AR evicted this time).
+    // "frontendWeights" is the AR-STREAMING-only tag (EN streaming's frontend
+    // is monolithic), so its presence in released proves the AR model — not
+    // the EN one — was the evicted resident. (The AR transcribe itself
+    // decoded EN-script ids the AR tokenizer skips → gated empty text, which
+    // this test never asserts on.)
     const result = await engine.transcribe(testWav());
     expect(result.text).toBe("hello world");
-    expect(ort.released).toContain("decoder");
-    expect(ort.created.filter((t) => t === "frontend")).toHaveLength(2);
+    expect(ort.released).toContain("frontendWeights");
+    expect(ort.created.filter((t) => t === "frontend")).toHaveLength(3);
   });
 
   it("shares one model load across concurrent transcribes of the same language", async () => {
@@ -379,12 +382,15 @@ describe("model lifecycle (LRU + dedupe)", () => {
     expect(result.text).toBe("hello world");
   });
 
-  it("warm() preloads a language's slot-1 model without running any graph", async () => {
+  it("warm() preloads a language's slot-1 model (bind only, no decode)", async () => {
     const { mod, ort } = await freshModule();
     const engine = mod.createMoonshineSttEngine({ debug: false, modelOrigin: fakeOrigin() });
     await engine.warm("ar");
-    expect(ort.created).toContain("decoder");
-    expect(ort.runs).toHaveLength(0);
+    expect(ort.created).toContain("frontendWeights");
+    // The AR weights blob runs exactly once at bind (load-time, by design —
+    // same as the server engine's warm); no decoder step ever ran.
+    expect(ort.runs.filter((r) => r.tag === "frontendWeights")).toHaveLength(1);
+    expect(ort.runs.filter((r) => r.tag === "decoderKv")).toHaveLength(0);
   });
 });
 

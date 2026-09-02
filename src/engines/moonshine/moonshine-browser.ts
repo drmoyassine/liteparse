@@ -19,10 +19,11 @@
  *    stt-gateway leg. The server engine reports honest confidence and lets the
  *    runner service gate, because its escalation slots are local; the browser's
  *    only stronger leg is external.
- *  - a per-model LRU caps resident sessions (default 2: EN streaming + AR batch
- *    ≈ 139 MB of weights — beside the OCR pair that IS the memory pressure case).
- *    Forcing the AR streaming model instead of batch AR adds ~32 MB (and needs
- *    the files mirrored same-origin — see BROWSER_DEFAULT_STT_MODEL).
+ *  - a per-model LRU caps resident sessions (default 2: EN streaming + AR
+ *    streaming ≈ 144 MB of weights — beside the OCR pair that IS the memory
+ *    pressure case). Both slot-1 models load from HF (AR streaming via the
+ *    byte-identical mirror of the official artifacts — see shared/models.ts);
+ *    forcing batch AR instead saves ~5 MB.
  */
 
 // Load the WASM-ONLY (non-jsep) build LAZILY — same reasoning as the OCR runner:
@@ -112,7 +113,7 @@ export interface MoonshineBrowserOptions {
   maxSeconds?: number;
   /**
    * Cap on simultaneously resident models; least-recently-used is disposed
-   * (default 2 — EN streaming + AR batch; set 1 for low-memory devices).
+   * (default 2 — EN streaming + AR streaming; set 1 for low-memory devices).
    */
   maxLoadedModels?: number;
 }
@@ -147,8 +148,9 @@ export class MoonshineRunner {
     const t0 = performance.now();
 
     const language: SttLanguage = topts.language ?? this.opts.language ?? "en";
-    // Browser defaults (BROWSER map): AR stays batch — the official streaming
-    // CDN sends no CORS headers, so a tab can't fetch those graphs from source.
+    // Browser defaults (BROWSER map): AR = streaming via the CORS-open HF
+    // mirror (byte-identical to the official CDN set) — WASM decodes it at
+    // RTF ≈ 0.19 single-threaded (measured 2026-09-03), same as native.
     const modelId = resolveModelId(this.opts.model, language, BROWSER_DEFAULT_STT_MODEL);
     const loaded = await this.ensureModel(modelId);
 

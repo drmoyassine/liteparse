@@ -44,8 +44,9 @@ describe("toMoonshineUrl", () => {
     for (const desc of Object.values(MOONSHINE_MODELS)) {
       for (const [role, f] of Object.entries(desc.files)) {
         if (role === "tokenizer" || role === "streamingConfig") continue;
-        // Per-file absolute override (the official AR streaming CDN) wins;
-        // everything else is the descriptor repo's HF resolve URL.
+        // Every model resolves from its HF repo (the per-file url override
+        // seam exists but is unused since the AR streaming set moved to the
+        // mirror — f.url is undefined for every descriptor today).
         expect(toMoonshineUrl(moonshineDescriptor(desc, role))).toBe(
           f.url ?? `https://huggingface.co/${desc.repo}/resolve/main/${f.repoPath}`,
         );
@@ -53,17 +54,17 @@ describe("toMoonshineUrl", () => {
     }
   });
 
-  it("routes the AR streaming binaries to the official CDN", () => {
+  it("routes the AR streaming binaries to the HF mirror (CORS-open)", () => {
     const ar = MOONSHINE_MODELS["moonshine-streaming-tiny-ar"]!;
-    expect(toMoonshineUrl(moonshineDescriptor(ar, "frontend"))).toBe(
-      "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/frontend.model.ort",
-    );
+    // The official CDN (download.moonshine.ai) serves no CORS headers, so the
+    // graphs load from our byte-identical mirror instead — which is what makes
+    // the streaming id usable as the BROWSER default too.
+    const M = "https://huggingface.co/Drmoyassine/moonshine-streaming-tiny-ar-ort/resolve/main/";
+    expect(toMoonshineUrl(moonshineDescriptor(ar, "frontend"))).toBe(`${M}frontend.model.ort`);
     expect(toMoonshineUrl(moonshineDescriptor(ar, "frontendWeights"))).toBe(
-      "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/frontend.weights.ort",
+      `${M}frontend.weights.ort`,
     );
-    expect(toMoonshineUrl(moonshineDescriptor(ar, "decoderKv"))).toBe(
-      "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/decoder_kv.ort",
-    );
+    expect(toMoonshineUrl(moonshineDescriptor(ar, "decoderKv"))).toBe(`${M}decoder_kv.ort`);
     // ...while the tokenizer sidecar stays same-origin like every other model.
     expect(toMoonshineUrl(moonshineDescriptor(ar, "tokenizer"))).toBe(
       `${ORIGIN}/models/moonshine/streaming-tiny-ar/tokenizer.json`,

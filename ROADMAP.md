@@ -115,17 +115,18 @@ constraints — **latency** and **Arabic/English** — better than Whisper at ev
   0.1–1 TOPS / <1GB → **v1 local tier needs no WebGPU**: plain WASM covers Firefox,
   Safari, old Android. No capability cliff.
 - **Local-runnable models for both EN and AR** (EN streaming `.ort`, AR batch int8,
-  AR official streaming `.ort` — all verified loadable in ort-node, the first two also
-  ort-web/wasm, by the 2026-09-01/02 spikes) → the same-models-every-tier rule holds
-  for EN; AR's *browser* leg stays batch (the official streaming CDN sends no CORS
-  headers — a tab can't fetch those graphs; see Artifact status).
+  AR official streaming `.ort` — all verified loadable in ort-node AND
+  ort-web/wasm, by the 2026-09-01/02 spikes + the 2026-09-03 WASM measurement)
+  → the same-models-every-tier rule holds for BOTH languages since the AR
+  streaming set moved to a CORS-open HF mirror (WASM RTF ≈ 0.19 single-threaded,
+  same as native — see Artifact status).
 
 **The cascade (mirrors the OCR one):**
 
 | Tier | Models | Role |
 |---|---|---|
-| Browser (WASM worker) | EN `moonshine-streaming-tiny` `.ort`; AR **batch** `tiny-ar` int8 ONNX | live dictation + clips, both langs |
-| `apps/runner` slot 1 | EN `moonshine-streaming-tiny` `.ort`; AR **official streaming** `tiny-streaming-ar` `.ort` (useful sensors CDN, Community License) | browser parity for server-originated audio; AR survives 27 s clips here |
+| Browser (WASM worker) | EN `moonshine-streaming-tiny` `.ort`; AR **official streaming** `tiny-streaming-ar` `.ort` (HF mirror) | live dictation + clips, both langs |
+| `apps/runner` slot 1 | EN `moonshine-streaming-tiny` `.ort`; AR **official streaming** `tiny-streaming-ar` `.ort` (HF mirror of the official CDN set, MIT) | browser parity for server-originated audio; AR survives 27 s clips here |
 | `apps/runner` slot 2 | `moonshine-base` ONNX EN (MIT) | strictly-stronger escalation (EN only) |
 | External gateway | `gpt-4o-transcribe` via `SttGateway` | quality ceiling, confidence-gated — the AR escalation path |
 
@@ -181,17 +182,21 @@ streaming set is unmeasured; `stt-lab` covers both rather than gating an extra.
      (spike notes: `moonshine-voice` pip package; `quantize_dynamic` full-graph
      silently empties EN decode — only `op_types_to_quantize=["MatMul"]` is safe).
   2. The **official CDN artifacts** (`download.moonshine.ai/model/tiny-streaming-ar/
-     quantized_26_08_24`, Moonshine Community License — community tier <$1M revenue,
-     enterprise above) decode cleanly one-shot AND chunked at 4.8 s and 27.2 s
+     quantized_26_08_24`, **MIT** — see Licenses below) decode cleanly one-shot AND chunked at 4.8 s and 27.2 s
      (verified through our `decodeStreaming` loop verbatim: 55 tokens, natural EOS,
      RTF ≈ 0.20, conf 0.82). **Shipped as the runner's AR slot 1** (Path A): six
      graphs, 32.4 MB, same EN-shaped contract plus one quirk — the frontend ships as
      `frontend.model.ort` (bare graph, weights as INPUTS) + `frontend.weights.ort`
      (blob graph run once at load, outputs merged by name via
-     `bindFrontendWeights`). The CDN sends **no CORS headers**, so the browser
-     engine keeps batch tiny-ar as its AR default (`BROWSER_DEFAULT_STT_MODEL`);
-     a consumer can force the streaming id if they mirror the files under their
-     own origin. Wrong-language audio loops ('نحن نحن نحن…') — a detectable
+     `bindFrontendWeights`). The CDN sends **no CORS headers**, so since 0.4.4
+     the set is served from a **byte-identical HF mirror**
+     (`Drmoyassine/moonshine-streaming-tiny-ar-ort`, uploaded 2026-09-03,
+     sha256-verified round-trip, CORS confirmed on both redirect hops) — which
+     flipped the browser's AR default to streaming too
+     (`BROWSER_DEFAULT_STT_MODEL`): single-threaded WASM decodes the set at
+     **RTF ≈ 0.19** (measured 2026-09-03 through the real decode loop — same
+     as native), so batch tiny-ar demoted to an explicit-choice fallback.
+     Wrong-language audio loops ('نحن نحن نحن…') — a detectable
      signature queued as an input for v0.5.0's `language:"auto"` arbitration.
 - **`onnx-community/moonshine-base-ONNX` EN** = **MIT** ✅ (fp32/fp16/int8/uint8/q4
   full matrix) — slot 2's license question is closed. `moonshine-base-ar-ONNX` exists
@@ -201,8 +206,11 @@ streaming set is unmeasured; `stt-lab` covers both rather than gating an extra.
   "other" ⚠ — never redistributed via npm (fetch script + HF browser download, same
   as PP-OCR today); resolve the actual license text before any *public* Docker
   distribution. Internal runner bake is use, not redistribution. The official AR
-  streaming set = **Moonshine Community License** ⚠ — same fetch/bake-only stance
-  (Community tier; check the tier terms before commercial SaaS use).
+  streaming set = **MIT** ✅ (corrected 2026-09-03 — an earlier note here said
+  Community License, which actually covers only the legacy NON-streaming
+  multilingual models; the streaming family is MIT per the upstream LICENSE and
+  the HF model card. Our mirror repo rehosts it under MIT with full sha256
+  provenance).
 - Arabic quality: card benchmarks only (MSA-heavy corpora). Dialect (Gulf first),
   real-mic conditions, and mixed speech are **unmeasured** → that is `stt-lab`'s job.
 

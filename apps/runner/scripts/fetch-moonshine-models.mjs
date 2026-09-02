@@ -34,20 +34,21 @@ const ARTIFACTS = [
   ["streaming-tiny-en", "adapter.ort", "https://huggingface.co/moonshine-ai/moonshine-streaming/resolve/main/onnx/tiny/adapter.ort", 5.0],
   ["streaming-tiny-en", "cross_kv.ort", "https://huggingface.co/moonshine-ai/moonshine-streaming/resolve/main/onnx/tiny/cross_kv.ort", 1.2],
   ["streaming-tiny-en", "decoder_kv.ort", "https://huggingface.co/moonshine-ai/moonshine-streaming/resolve/main/onnx/tiny/decoder_kv.ort", 90.9],
-  // AR slot 1 (runner/server) — OFFICIAL Useful Sensors artifacts on
-  // download.moonshine.ai (quantized_26_08_24): decode long clips cleanly
-  // where every HF-checkpoint export looped past ~2 s. Moonshine Community
-  // License — fetch/bake only, never npm-redistribute. The frontend ships as
-  // graph + weights pair (bindFrontendWeights in shared/decode.ts).
-  ["streaming-tiny-ar", "frontend.model.ort", "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/frontend.model.ort", 0.022, 20_000],
-  ["streaming-tiny-ar", "frontend.weights.ort", "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/frontend.weights.ort", 2.0],
-  ["streaming-tiny-ar", "encoder.ort", "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/encoder.ort", 7.4],
-  ["streaming-tiny-ar", "adapter.ort", "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/adapter.ort", 1.3],
-  ["streaming-tiny-ar", "cross_kv.ort", "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/cross_kv.ort", 1.2],
-  ["streaming-tiny-ar", "decoder_kv.ort", "https://download.moonshine.ai/model/tiny-streaming-ar/quantized_26_08_24/decoder_kv.ort", 18.8],
-  // AR slot 1 in the BROWSER engine only (CDN has no CORS) + explicit-choice
-  // fallback — onnx-community/moonshine-tiny-ar-ONNX int8 (license "other":
-  // fetch/bake freely, never npm-redistribute — noted in shared/models.ts)
+  // AR slot 1 — OFFICIAL Useful Sensors artifacts (quantized_26_08_24),
+  // fetched from our byte-identical HF mirror (the official CDN sends no CORS
+  // headers; MIT — the streaming family is MIT per the upstream LICENSE,
+  // verified 2026-09-03): decode long clips cleanly where every HF-checkpoint
+  // export looped past ~2 s. The frontend ships as graph + weights pair
+  // (bindFrontendWeights in shared/decode.ts).
+  ["streaming-tiny-ar", "frontend.model.ort", "https://huggingface.co/Drmoyassine/moonshine-streaming-tiny-ar-ort/resolve/main/frontend.model.ort", 0.022, 20_000],
+  ["streaming-tiny-ar", "frontend.weights.ort", "https://huggingface.co/Drmoyassine/moonshine-streaming-tiny-ar-ort/resolve/main/frontend.weights.ort", 2.0],
+  ["streaming-tiny-ar", "encoder.ort", "https://huggingface.co/Drmoyassine/moonshine-streaming-tiny-ar-ort/resolve/main/encoder.ort", 7.4],
+  ["streaming-tiny-ar", "adapter.ort", "https://huggingface.co/Drmoyassine/moonshine-streaming-tiny-ar-ort/resolve/main/adapter.ort", 1.3],
+  ["streaming-tiny-ar", "cross_kv.ort", "https://huggingface.co/Drmoyassine/moonshine-streaming-tiny-ar-ort/resolve/main/cross_kv.ort", 1.2],
+  ["streaming-tiny-ar", "decoder_kv.ort", "https://huggingface.co/Drmoyassine/moonshine-streaming-tiny-ar-ort/resolve/main/decoder_kv.ort", 18.8],
+  // AR explicit-choice fallback (batch family) — onnx-community/
+  // moonshine-tiny-ar-ONNX int8 (license "other": fetch/bake freely, never
+  // npm-redistribute — noted in shared/models.ts)
   ["batch-tiny-ar", "encoder_model_int8.onnx", "https://huggingface.co/onnx-community/moonshine-tiny-ar-ONNX/resolve/main/onnx/encoder_model_int8.onnx", 7.6],
   ["batch-tiny-ar", "decoder_model_merged_int8.onnx", "https://huggingface.co/onnx-community/moonshine-tiny-ar-ONNX/resolve/main/onnx/decoder_model_merged_int8.onnx", 19.4],
   // EN slot 2 — onnx-community/moonshine-base-ONNX int8 (MIT)
