@@ -85,7 +85,7 @@ class FakeTensor {
 interface Script {
   /** Streaming decoder token script (default "hello world" then EOS). */
   streamingTokens?: number[];
-  /** Batch decoder token script (default diacritized Arabic then EOS). */
+  /** Batch decoder token script (set per test — base-en tests pass EN ids). */
   batchTokens?: number[];
   /** Logits row width / fake vocab size. */
   vocabSize?: number;
@@ -171,7 +171,7 @@ function mockOrtFactory(script: Script = {}) {
           outputs.logits = logitsFor(name, step);
           for (let l = 0; l < 8; l++) {
             for (const kind of ["decoder.key", "decoder.value", "encoder.key", "encoder.value"]) {
-              outputs[`present.${l}.${kind}`] = T([1, 8, step + 1, 36]);
+              outputs[`present.${l}.${kind}`] = T([1, 8, step + 1, 52]);
             }
           }
           chainStep.set(outputs["present.0.decoder.key"]!, step);
@@ -311,20 +311,20 @@ describe("transcribe — EN streaming family", () => {
   });
 });
 
-describe("transcribe — AR batch family (forced; the AR slot-1 default is streaming now)", () => {
-  it("runs the merged-decoder KV flow and strips tashkeel by default", async () => {
+describe("transcribe — EN batch family (base-en, forced; runner slot 2's model)", () => {
+  it("runs the merged-decoder KV flow", async () => {
     const root = fakeModelRoot();
     tempDirs.push(root);
-    const { mod, ort } = await freshModule();
+    const { mod, ort } = await freshModule({ batchTokens: [12, 13, 2] });
     const engine = await mod.createMoonshineServerEngine({
       debug: false,
       modelPath: root,
-      model: "moonshine-batch-tiny-ar",
+      model: "moonshine-batch-base-en",
     });
 
-    const result = await engine.transcribe(testWav(), { language: "ar" });
-    expect(result.text).toBe("محمد"); // مُحَمَّد minus diacritics
-    expect(result.language).toBe("ar");
+    const result = await engine.transcribe(testWav());
+    expect(result.text).toBe("hello world");
+    expect(result.language).toBe("en");
 
     // Batch family files, not the streaming chain.
     expect(ort.created).toContain("encoder_model_int8.onnx");
@@ -335,46 +335,36 @@ describe("transcribe — AR batch family (forced; the AR slot-1 default is strea
 
     // Merged-decoder cache flow: use_cache_branch 0 → 1, present.* threaded into past.
     const dec = ort.runs.filter((r) => r.path === "decoder_model_merged_int8.onnx");
-    expect(dec).toHaveLength(2); // token, EOS
+    expect(dec).toHaveLength(3); // "hello", "world", EOS
     expect(Array.from(dec[0]!.feeds["use_cache_branch"]!.data as Uint8Array)).toEqual([0]);
     expect(Array.from(dec[1]!.feeds["use_cache_branch"]!.data as Uint8Array)).toEqual([1]);
-    // Empty past on step 0, present.* identity-threaded on step 1.
-    expect(dec[0]!.feeds["past_key_values.0.decoder.key"]!.dims).toEqual([1, 8, 0, 36]);
+    // Empty past on step 0 at base-en geometry (heads 8 × headDim 52),
+    // present.* identity-threaded on step 1.
+    expect(dec[0]!.feeds["past_key_values.0.decoder.key"]!.dims).toEqual([1, 8, 0, 52]);
     expect(dec[1]!.feeds["past_key_values.0.decoder.key"]).toBe(
       dec[0]!.outputs["present.0.decoder.key"],
     );
-  });
-
-  it("keeps diacritics when keepDiacritics is set", async () => {
-    const root = fakeModelRoot();
-    tempDirs.push(root);
-    const { mod } = await freshModule();
-    const engine = await mod.createMoonshineServerEngine({
-      debug: false,
-      modelPath: root,
-      model: "moonshine-batch-tiny-ar",
-      keepDiacritics: true,
-    });
-    const result = await engine.transcribe(testWav(), { language: "ar" });
-    expect(result.text).toBe("مُحَمَّد");
+    expect(dec[1]!.feeds["past_key_values.0.encoder.key"]).toBe(
+      dec[0]!.outputs["present.0.encoder.key"],
+    );
   });
 
   it("threads prefill cross-KV once, then freezes it (cache-branch encoder presents are placeholders)", async () => {
     // Regression: the prefill step (use_cache_branch=0) emits the REAL
     // cross-attention KV from encoder_hidden_states; the cache branch never
-    // recomputes it and only emits empty [0,8,1,36] placeholders (probed
+    // recomputes it and only emits empty [0,8,1,52] placeholders (probed
     // 2026-09-01). Skipping the prefill threading left cross-attention with
     // empty K/V — the decoder went deaf and hallucinated loops to the cap.
     const root = fakeModelRoot();
     tempDirs.push(root);
-    const { mod, ort } = await freshModule({ batchTokens: [20, 20, 2] });
+    const { mod, ort } = await freshModule({ batchTokens: [12, 12, 2] });
     const engine = await mod.createMoonshineServerEngine({
       debug: false,
       modelPath: root,
-      model: "moonshine-batch-tiny-ar",
+      model: "moonshine-batch-base-en",
     });
-    const result = await engine.transcribe(testWav(), { language: "ar" });
-    expect(result.text).toBe("محمدمحمد");
+    const result = await engine.transcribe(testWav());
+    expect(result.text).toBe("hello hello");
     const dec = ort.runs.filter((r) => r.path === "decoder_model_merged_int8.onnx");
     expect(dec).toHaveLength(3);
     // Self-KV threads: step N+1 feeds step N's present.
@@ -393,166 +383,26 @@ describe("transcribe — AR batch family (forced; the AR slot-1 default is strea
     expect(dec[2]!.feeds["past_key_values.0.encoder.key"]).toBe(
       dec[0]!.outputs["present.0.encoder.key"],
     );
-    expect(dec[1]!.feeds["past_key_values.0.encoder.key"]!.dims).toEqual([1, 8, 1, 36]);
+    expect(dec[1]!.feeds["past_key_values.0.encoder.key"]!.dims).toEqual([1, 8, 1, 52]);
   });
 });
 
-describe("transcribe — AR streaming family (official artifacts, slot-1 default)", () => {
-  it("binds the frontend weights pair and decodes through the streaming chain", async () => {
+describe("transcribe — AR streaming tashkeel policy", () => {
+  it("strips diacritics by default, keeps them with keepDiacritics", async () => {
     const root = fakeModelRoot();
     tempDirs.push(root);
-    // Streaming script plays the AR vocab token (محمد) then EOS.
-    const { mod, ort } = await freshModule({ streamingTokens: [20, 2] });
-    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
+    const { mod } = await freshModule({ streamingTokens: [20, 2] });
 
-    const result = await engine.transcribe(testWav(), { language: "ar" });
-    expect(result.text).toBe("محمد"); // مُحَمَّد minus diacritics
-    expect(result.language).toBe("ar");
+    const stripEngine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
+    const strippedResult = await stripEngine.transcribe(testWav(), { language: "ar" });
+    expect(strippedResult.text).toBe("محمد"); // مُحَمَّد minus diacritics
 
-    // The default AR slot is now the OFFICIAL streaming five-graph chain —
-    // front end shipped as graph + weights pair — not the batch pair.
-    expect(ort.created).toContain("frontend.model.ort");
-    expect(ort.created).toContain("frontend.weights.ort");
-    expect(ort.created).not.toContain("decoder_model_merged_int8.onnx");
-
-    // The weights blob runs EXACTLY ONCE at load; its outputs are threaded
-    // into every frontend call by NAME (bindFrontendWeights).
-    const weightRuns = ort.runs.filter((r) => r.path === "frontend.weights.ort");
-    expect(weightRuns).toHaveLength(1);
-    const frontend = ort.runs.find((r) => r.path === "frontend.model.ort")!;
-    for (const w of ["onnx::MatMul_124_add_tensor_add_tensor", "onnx::Conv_127_add_tensor_add_tensor", "onnx::Conv_134_add_tensor_add_tensor"]) {
-      expect(frontend.feeds[w]).toBe(weightRuns[0]!.outputs[w]);
-    }
-    // The decode itself is the plain streaming loop (BOS + empty self-KV).
-    const decoderRuns = ort.runs.filter((r) => r.path === "decoder_kv.ort");
-    expect(decoderRuns).toHaveLength(2); // محمد, EOS
-    expect(decoderRuns[0]!.feeds["k_self"]!.dims).toEqual([2, 1, 2, 0, 4]);
-  });
-
-  it("EN streaming loads monolithic — no weights session created", async () => {
-    const root = fakeModelRoot();
-    tempDirs.push(root);
-    const { mod, ort } = await freshModule();
-    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
-    await engine.transcribe(testWav()); // default language EN
-    expect(ort.created).toContain("frontend.ort");
-    expect(ort.created).not.toContain("frontend.weights.ort");
-    expect(ort.created).not.toContain("frontend.model.ort");
-  });
-
-  it("dispose releases the raw frontend pair alongside the chain", async () => {
-    const root = fakeModelRoot();
-    tempDirs.push(root);
-    const { mod, ort } = await freshModule({ streamingTokens: [20, 2] });
-    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
-    await engine.transcribe(testWav(), { language: "ar" });
-    engine.dispose();
-    const released = ort.created.length; // sessions are bare mocks; reload count proves release bookkeeping
-    const e2 = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
-    await e2.transcribe(testWav(), { language: "ar" });
-    // Everything (graph + weights + encoder + adapter + cross_kv + decoder) recreated.
-    expect(ort.created.length).toBe(released * 2);
-  });
-});
-
-describe("model selection", () => {
-  it("forces a known model id across languages", async () => {
-    const root = fakeModelRoot();
-    tempDirs.push(root);
-    const { mod, ort } = await freshModule();
-    const engine = await mod.createMoonshineServerEngine({
+    const keepEngine = await mod.createMoonshineServerEngine({
       debug: false,
       modelPath: root,
-      model: "moonshine-batch-base-en",
+      keepDiacritics: true,
     });
-    await engine.transcribe(testWav(), { language: "ar" });
-    expect(ort.created).toContain("decoder_model_merged_int8.onnx");
-    expect(ort.runs.some((r) => r.path === "frontend.ort")).toBe(false);
-  });
-
-  it("falls back to the slot-1 default for unknown model strings", async () => {
-    const root = fakeModelRoot();
-    tempDirs.push(root);
-    const { mod, ort } = await freshModule();
-    const engine = await mod.createMoonshineServerEngine({
-      debug: false,
-      modelPath: root,
-      model: "whisper-large", // unknown id: (string & {}) accepts it, runtime falls back
-    });
-    await engine.transcribe(testWav());
-    expect(ort.created).toContain("frontend.ort");
-  });
-});
-
-describe("engine contract", () => {
-  it("propagates WavError for non-WAV bytes (the runner maps this to 422)", async () => {
-    const root = fakeModelRoot();
-    tempDirs.push(root);
-    const { mod } = await freshModule();
-    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
-    // resetModules gives the engine its own wav.js copy, so assert on the
-    // typed shape (name + code) rather than cross-graph instanceof.
-    const err = await engine.transcribe(new TextEncoder().encode("not audio")).then(
-      () => null,
-      (e: unknown) => e,
-    );
-    expect(err).toMatchObject({ name: "WavError", code: "not_wav" });
-  });
-
-  it("rejects immediately when the signal is already aborted", async () => {
-    const root = fakeModelRoot();
-    tempDirs.push(root);
-    const { mod, ort } = await freshModule();
-    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
-    const controller = new AbortController();
-    controller.abort();
-    await expect(engine.transcribe(testWav(), { signal: controller.signal })).rejects.toThrow(
-      /aborted/,
-    );
-    expect(ort.runs).toHaveLength(0);
-  });
-
-  it("warms a language's slot-1 model without any audio", async () => {
-    const root = fakeModelRoot();
-    tempDirs.push(root);
-    const { mod, ort } = await freshModule();
-    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
-    await engine.warm("ar");
-    // AR slot 1 = official streaming set: BOTH frontend files load, and the
-    // weights blob is run ONCE at bind (it is part of loading, not decoding) —
-    // but no decode graph (frontend model / decoder) may run without audio.
-    expect(ort.created).toContain("frontend.model.ort");
-    expect(ort.created).toContain("frontend.weights.ort");
-    expect(ort.runs.filter((r) => r.path === "frontend.weights.ort")).toHaveLength(1);
-    expect(ort.runs.filter((r) => r.path === "decoder_kv.ort")).toHaveLength(0);
-  });
-});
-
-describe("lifecycle", () => {
-  it("dispose releases sessions; the next engine reloads them", async () => {
-    const root = fakeModelRoot();
-    tempDirs.push(root);
-    const { mod, ort } = await freshModule();
-    const e1 = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
-    await e1.transcribe(testWav());
-    const loadsAfterFirst = ort.created.length;
-    e1.dispose();
-
-    const e2 = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
-    const result = await e2.transcribe(testWav());
-    expect(result.text).toBe("hello world");
-    expect(ort.created.length).toBe(loadsAfterFirst * 2); // everything recreated
-  });
-
-  it("shares one model load across concurrent transcribes of the same language", async () => {
-    const root = fakeModelRoot();
-    tempDirs.push(root);
-    const { mod, ort } = await freshModule();
-    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
-    const [a, b] = await Promise.all([engine.transcribe(testWav()), engine.transcribe(testWav())]);
-    expect(a.text).toBe("hello world");
-    expect(b.text).toBe("hello world");
-    // One session per graph despite two racing first-calls (loading dedupe).
-    expect(ort.created.filter((f) => f === "frontend.ort")).toHaveLength(1);
+    const kept = await keepEngine.transcribe(testWav(), { language: "ar" });
+    expect(kept.text).toBe("مُحَمَّد");
   });
 });

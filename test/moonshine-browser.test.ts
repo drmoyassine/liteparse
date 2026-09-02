@@ -73,7 +73,7 @@ function fakeOrigin(): ModelOrigin & { served: string[] } {
       served.push(d.id);
       const role = d.id.slice(d.id.indexOf("/") + 1);
       if (role === "tokenizer") {
-        const ar = d.id.startsWith("moonshine-batch-tiny-ar") || d.id.startsWith("moonshine-streaming-tiny-ar");
+        const ar = d.id.startsWith("moonshine-streaming-tiny-ar");
         return new TextEncoder().encode(ar ? AR_TOKENIZER : EN_TOKENIZER);
       }
       if (role === "streamingConfig") return new TextEncoder().encode(STREAMING_CFG);
@@ -152,7 +152,7 @@ function mockOrtFactory(script: Script = {}) {
           outputs.logits = logitsFor(tag, step);
           for (let l = 0; l < 8; l++) {
             for (const kind of ["decoder.key", "decoder.value", "encoder.key", "encoder.value"]) {
-              outputs[`present.${l}.${kind}`] = T([1, 8, step + 1, 36]);
+              outputs[`present.${l}.${kind}`] = T([1, 8, step + 1, 52]);
             }
           }
           chainStep.set(outputs["present.0.decoder.key"]!, step);
@@ -258,18 +258,18 @@ describe("createMoonshineSttEngine — EN streaming family", () => {
   });
 });
 
-describe("createMoonshineSttEngine — AR batch family (forced; the browser default is streaming now)", () => {
-  it("runs the merged-decoder flow and strips tashkeel by default", async () => {
-    const { mod, ort } = await freshModule();
+describe("createMoonshineSttEngine — EN batch family (base-en, forced)", () => {
+  it("runs the merged-decoder flow", async () => {
+    const { mod, ort } = await freshModule({ batchTokens: [12, 13, 2] });
     const engine = mod.createMoonshineSttEngine({
       debug: false,
       modelOrigin: fakeOrigin(),
-      model: "moonshine-batch-tiny-ar",
+      model: "moonshine-batch-base-en",
     });
 
-    const result = await engine.transcribe(testWav(), { language: "ar" });
-    expect(result.text).toBe("محمد"); // مُحَمَّد minus diacritics
-    expect(result.language).toBe("ar");
+    const result = await engine.transcribe(testWav());
+    expect(result.text).toBe("hello world");
+    expect(result.language).toBe("en");
 
     // Batch pair (raw waveform in — ConvFrontend baked into the encoder).
     expect(ort.created).toContain("encoder");
@@ -281,7 +281,7 @@ describe("createMoonshineSttEngine — AR batch family (forced; the browser defa
     // Merged-decoder cache flow: use_cache_branch 0 → 1; prefill cross-KV
     // threads once then freezes, decoder self-KV threads every step.
     const dec = ort.runs.filter((r) => r.tag === "decoder");
-    expect(dec).toHaveLength(2);
+    expect(dec).toHaveLength(3); // "hello", "world", EOS
     expect(Array.from(dec[0]!.feeds["use_cache_branch"]!.data as Uint8Array)).toEqual([0]);
     expect(Array.from(dec[1]!.feeds["use_cache_branch"]!.data as Uint8Array)).toEqual([1]);
     expect(dec[1]!.feeds["past_key_values.0.decoder.key"]).toBe(
@@ -290,18 +290,6 @@ describe("createMoonshineSttEngine — AR batch family (forced; the browser defa
     expect(dec[1]!.feeds["past_key_values.0.encoder.key"]).toBe(
       dec[0]!.outputs["present.0.encoder.key"],
     );
-  });
-
-  it("keeps diacritics when keepDiacritics is set", async () => {
-    const { mod } = await freshModule();
-    const engine = mod.createMoonshineSttEngine({
-      debug: false,
-      modelOrigin: fakeOrigin(),
-      model: "moonshine-batch-tiny-ar",
-      keepDiacritics: true,
-    });
-    const result = await engine.transcribe(testWav(), { language: "ar" });
-    expect(result.text).toBe("مُحَمَّد");
   });
 });
 
@@ -332,6 +320,17 @@ describe("createMoonshineSttEngine — AR streaming family (the BROWSER default)
       weightRuns[0]!.outputs["onnx::MatMul_124_add_tensor_add_tensor"],
     );
   });
+  it("keeps diacritics when keepDiacritics is set", async () => {
+    const { mod } = await freshModule({ streamingTokens: [20, 2] });
+    const engine = mod.createMoonshineSttEngine({
+      debug: false,
+      modelOrigin: fakeOrigin(),
+      keepDiacritics: true,
+    });
+    const result = await engine.transcribe(testWav(), { language: "ar" });
+    expect(result.text).toBe("مُحَمَّد");
+  });
+
 });
 
 describe("model lifecycle (LRU + dedupe)", () => {

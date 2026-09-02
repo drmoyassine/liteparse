@@ -81,8 +81,8 @@ describe("floors", () => {
     const { MODEL_STT_CONFIDENCE_FLOORS } = await import(
       "../src/engines/moonshine/shared/confidence.js"
     );
-    MODEL_STT_CONFIDENCE_FLOORS["moonshine-batch-tiny-ar"] = 0.62;
-    expect(sttFloorFor("moonshine-batch-tiny-ar")).toBe(0.62);
-    delete MODEL_STT_CONFIDENCE_FLOORS["moonshine-batch-tiny-ar"];
+    MODEL_STT_CONFIDENCE_FLOORS["moonshine-batch-base-en"] = 0.62;
+    expect(sttFloorFor("moonshine-batch-base-en")).toBe(0.62);
+    delete MODEL_STT_CONFIDENCE_FLOORS["moonshine-batch-base-en"];
   });
 });

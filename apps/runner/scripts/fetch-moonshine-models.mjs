@@ -46,11 +46,6 @@ const ARTIFACTS = [
   ["streaming-tiny-ar", "adapter.ort", "https://huggingface.co/Drmoyassine/moonshine-streaming-tiny-ar-ort/resolve/main/adapter.ort", 1.3],
   ["streaming-tiny-ar", "cross_kv.ort", "https://huggingface.co/Drmoyassine/moonshine-streaming-tiny-ar-ort/resolve/main/cross_kv.ort", 1.2],
   ["streaming-tiny-ar", "decoder_kv.ort", "https://huggingface.co/Drmoyassine/moonshine-streaming-tiny-ar-ort/resolve/main/decoder_kv.ort", 18.8],
-  // AR explicit-choice fallback (batch family) — onnx-community/
-  // moonshine-tiny-ar-ONNX int8 (license "other": fetch/bake freely, never
-  // npm-redistribute — noted in shared/models.ts)
-  ["batch-tiny-ar", "encoder_model_int8.onnx", "https://huggingface.co/onnx-community/moonshine-tiny-ar-ONNX/resolve/main/onnx/encoder_model_int8.onnx", 7.6],
-  ["batch-tiny-ar", "decoder_model_merged_int8.onnx", "https://huggingface.co/onnx-community/moonshine-tiny-ar-ONNX/resolve/main/onnx/decoder_model_merged_int8.onnx", 19.4],
   // EN slot 2 — onnx-community/moonshine-base-ONNX int8 (MIT)
   ["batch-base-en", "encoder_model_int8.onnx", "https://huggingface.co/onnx-community/moonshine-base-ONNX/resolve/main/onnx/encoder_model_int8.onnx", 19.5],
   ["batch-base-en", "decoder_model_merged_int8.onnx", "https://huggingface.co/onnx-community/moonshine-base-ONNX/resolve/main/onnx/decoder_model_merged_int8.onnx", 40.5],
@@ -65,7 +60,6 @@ for (const sidecar of [
   "streaming-tiny-en/streaming_config.json",
   "streaming-tiny-ar/tokenizer.json",
   "streaming-tiny-ar/streaming_config.json",
-  "batch-tiny-ar/tokenizer.json",
   "batch-base-en/tokenizer.json",
 ]) {
   if (!existsSync(resolve(MODELS_DIR, sidecar))) {

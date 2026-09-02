@@ -154,8 +154,8 @@ const BATCH_KV_KINDS = ["decoder.key", "decoder.value", "encoder.key", "encoder.
 /**
  * Anti-hallucination-loop decode budget, per the model authors' own runtime
  * policy: cap generated tokens proportionally to audio length instead of a
- * flat ceiling. Batch family: 13 tok/s (the moonshine-tiny-ar model card's
- * stated anti-loop mitigation); streaming family: 6.5 tok/s (the official
+ * flat ceiling. Batch family: 13 tok/s (the rate stated on the since-removed
+ * moonshine-tiny-ar card — still a sane guard for base-en); streaming family: 6.5 tok/s (the official
  * moonshine-v2 C++ runtime's decode_full policy). The descriptor's maxTokens
  * (position-embedding limit) stays the hard ceiling; a small floor keeps a
  * sub-second blip able to emit a word.
@@ -234,7 +234,7 @@ export async function decodeBatch(
         // 2026-09-01; it never recomputes cross-KV). Skipping this threading
         // leaves cross-attention with empty K/V at every step ≥ 1 — the
         // decoder goes DEAF and babbles LM-prior text to the token cap
-        // (tiny-ar hallucination loops, base-en truncated summaries).
+        // (base-en truncated summaries; the removed tiny-ar sibling looped).
         if (step > 0 && kind.startsWith("encoder.")) continue;
         past[`past_key_values.${l}.${kind}`] = out[`present.${l}.${kind}`];
       }

@@ -105,17 +105,17 @@ constraints — **latency** and **Arabic/English** — better than Whisper at ev
 - **Per-language models at edge sizes.** `moonshine-streaming-tiny-ar` (27M, MIT):
   CV-Arabic 17.9 / FLEURS-Arabic 12.6 WER — ≈ Whisper-medium (769M) territory at
   1/28th the params. Whisper-tiny is *unusable* on Arabic (WER 66–89); browser-sized
-  Whisper was never going to carry Arabic. (The checkpoint ships PyTorch-only, and
-  its weights loop past ~2 s — the AR *browser* slot runs the batch tiny-ar ONNX
-  export, the *runner* slot runs the official streaming artifacts; see Artifact
+  Whisper was never going to carry Arabic. (The HF checkpoint ships PyTorch-only
+  and its weights loop past ~2 s — both slots run the OFFICIAL streaming
+  artifacts instead, via our byte-identical HF mirror since 0.4.4; see Artifact
   status.)
 - **CPU-first streaming architecture.** Streaming encoder (~80ms lookahead, 50Hz
   causal frontend) + no Whisper-style 30s zero-padding — compute scales with actual
   audio length (≈5× less compute on a 10s clip than same-size Whisper). Designed for
   0.1–1 TOPS / <1GB → **v1 local tier needs no WebGPU**: plain WASM covers Firefox,
   Safari, old Android. No capability cliff.
-- **Local-runnable models for both EN and AR** (EN streaming `.ort`, AR batch int8,
-  AR official streaming `.ort` — all verified loadable in ort-node AND
+- **Local-runnable models for both EN and AR** (EN + AR official streaming `.ort`,
+  base-EN batch int8 — all verified loadable in ort-node AND
   ort-web/wasm, by the 2026-09-01/02 spikes + the 2026-09-03 WASM measurement)
   → the same-models-every-tier rule holds for BOTH languages since the AR
   streaming set moved to a CORS-open HF mirror (WASM RTF ≈ 0.19 single-threaded,
@@ -130,10 +130,11 @@ constraints — **latency** and **Arabic/English** — better than Whisper at ev
 | `apps/runner` slot 2 | `moonshine-base` ONNX EN (MIT) | strictly-stronger escalation (EN only) |
 | External gateway | `gpt-4o-transcribe` via `SttGateway` | quality ceiling, confidence-gated — the AR escalation path |
 
-**Code-switching:** the browser's AR model is batch `moonshine-tiny-ar` — the variant
-trained *with* code-switching; the runner's AR slot now runs the official streaming
-artifacts instead (long-clip regime — see Artifact status). Mixed AR/EN quality on the
-streaming set is unmeasured; `stt-lab` covers both rather than gating an extra.
+**Code-switching:** both tiers run the official AR streaming artifacts (the batch
+`moonshine-tiny-ar` variant — the one trained *with* code-switching — was removed from
+the set 2026-09-03: license "other", no measured advantage over streaming). Mixed
+AR/EN quality on the streaming set is unmeasured; `stt-lab` covers it rather than
+gating an extra.
 
 **Artifact status (verified 2026-09-01; spike run 2026-09-01 —
 `apps/runner/scripts/spike-moonshine.mjs`, all experiments passing):**
@@ -150,8 +151,13 @@ streaming set is unmeasured; `stt-lab` covers both rather than gating an extra.
   (6 layers × 8 heads × head_dim 40). Decoder exposes **`logits`** + self/cross KV
   state outputs — per-token logprob confidence works as designed. Config:
   `streaming_config.json` (frame_len 80, lookahead 16, vocab 32 768, bos 1 / eos 2).
-- **AR batch int8 ONNX** (`onnx-community/moonshine-tiny-ar-ONNX`, license **"other"**
-  ⚠): encoder 7.6 MB + decoder_model_merged 19.4 (≈27 MB). Encoder input is
+- **AR batch int8 ONNX** (`onnx-community/moonshine-tiny-ar-ONNX`) — **removed from
+  the set 2026-09-03** (license "other", superseded by the official streaming set on
+  every tier; its 3.7 MB tokenizer sidecar left the repo and the runner image with
+  it). The facts below are the dated probe record; the KV-threading CONTRACT is the
+  export family's and still governs base-en (whose geometry differs: 8 layers ×
+  8 heads × headDim 52 vs tiny-ar's 6 × 8 × 36): encoder 7.6 MB + decoder_model_merged
+  19.4 (≈27 MB). Encoder input is
   **`input_values` = raw 16 kHz waveform** — the ConvFrontend is baked into the
   encoder, so *no mel frontend is needed anywhere* (the feared `shared/audio.ts`
   fallback is dead). `last_hidden_state[1,40,288]` for 1 s of audio. Decoder is the
@@ -195,22 +201,20 @@ streaming set is unmeasured; `stt-lab` covers both rather than gating an extra.
      flipped the browser's AR default to streaming too
      (`BROWSER_DEFAULT_STT_MODEL`): single-threaded WASM decodes the set at
      **RTF ≈ 0.19** (measured 2026-09-03 through the real decode loop — same
-     as native), so batch tiny-ar demoted to an explicit-choice fallback.
+     as native), so batch tiny-ar was demoted and then removed outright (0.5.0).
      Wrong-language audio loops ('نحن نحن نحن…') — a detectable
      signature queued as an input for v0.5.0's `language:"auto"` arbitration.
 - **`onnx-community/moonshine-base-ONNX` EN** = **MIT** ✅ (fp32/fp16/int8/uint8/q4
   full matrix) — slot 2's license question is closed. `moonshine-base-ar-ONNX` exists
   but looks like a placeholder (0 downloads, no pipeline tags) — ignored; AR
   escalates straight to the external gateway past slot 1.
-- **Licenses:** streaming EN `.ort` + base EN = MIT ✅ (bake freely). `tiny-ar` =
-  "other" ⚠ — never redistributed via npm (fetch script + HF browser download, same
-  as PP-OCR today); resolve the actual license text before any *public* Docker
-  distribution. Internal runner bake is use, not redistribution. The official AR
-  streaming set = **MIT** ✅ (corrected 2026-09-03 — an earlier note here said
-  Community License, which actually covers only the legacy NON-streaming
-  multilingual models; the streaming family is MIT per the upstream LICENSE and
-  the HF model card. Our mirror repo rehosts it under MIT with full sha256
-  provenance).
+- **Licenses:** every model in the set is now MIT ✅ (bake freely): streaming EN,
+  base EN, and the official AR streaming set. (Corrected 2026-09-03 — an earlier
+  note here said Community License, which actually covers only the legacy
+  NON-streaming multilingual models; the streaming family is MIT per the upstream
+  LICENSE and the HF model card. Our mirror repo rehosts it under MIT with full
+  sha256 provenance. The license-"other" `tiny-ar` batch model was removed
+  2026-09-03, taking its never-redistribute caveat with it.)
 - Arabic quality: card benchmarks only (MSA-heavy corpora). Dialect (Gulf first),
   real-mic conditions, and mixed speech are **unmeasured** → that is `stt-lab`'s job.
 
@@ -227,7 +231,7 @@ streaming set is unmeasured; `stt-lab` covers both rather than gating an extra.
 
 **v0.5 — runner `/transcribe`:**
 - [x] `POST /transcribe` on `apps/runner` (same container/auth/model-pinning pattern):
-      slot 1 = streaming-tiny EN `.ort` + batch tiny-ar int8 (parity with browser),
+      slot 1 = streaming-tiny EN `.ort` + AR (batch tiny-ar then; official streaming since 0.4.3),
       slot 2 = base EN, then pass-through escalation to the caller's `SttGateway`.
       Arabic audio stays in our infra; kills per-call API cost on the happy path.
       *(Shipped 2026-09-01, Phases B.1–B.3: shared-core + `moonshine-server` engine via
@@ -257,7 +261,7 @@ streaming set is unmeasured; `stt-lab` covers both rather than gating an extra.
       Thresholds calibrated per **model × language** in `stt-lab` —
       `MODEL_STT_CONFIDENCE_FLOORS` is the seam. *(Shipped 2026-09-01, Phases B.2/C.)*
 - [x] Engine dispose/LRU (the deferred lifecycle work): `maxLoadedModels` (default 2 =
-      EN streaming + AR batch ≈ 139 MB) with least-recently-used disposal; inflight
+      EN + AR streaming ≈ 144 MB) with least-recently-used disposal; inflight
       loads deduped. *(Shipped 2026-09-01, Phase C.)*
 - [x] Diacritics policy decided once, in the engine (default: strip tashkeel;
       `keepDiacritics` to keep) — `shared/tokens.ts`; stt-lab validates output quality
@@ -309,7 +313,7 @@ D1 (VAD-chunked batch) shipped; D2 (true incremental decode) remains gated on a 
 **`stt-lab` — build with v0, gate v1 (the `ocr-lab` analog; lives beside it in
 studygram-app):**
 - [ ] Seed corpus: ~10 Arabic clips (MSA **and** Gulf dialect), ~5 mixed AR/EN, ~5 EN.
-- [ ] Run streaming-tiny EN `.ort` + batch tiny-ar int8 + base EN + `gpt-4o-transcribe`;
+- [ ] Run streaming-tiny EN/AR `.ort` + base EN + `gpt-4o-transcribe`;
       record quality (human-scored WER), TTFT, clip real-time factor,
       hallucination-on-silence rate, and diacritics behavior.
 - [ ] Decides: the code-switching add, the AR escalation slot (base-ar vs
@@ -319,7 +323,7 @@ studygram-app):**
 
 | Path | Estimate | Basis |
 |---|---|---|
-| Browser cold start (EN streaming `.ort` 112MB fp32 + AR batch int8 27MB) | ~139MB download + 1–3s session init; warm ~0.5–2s | measured artifact sizes (spike); preload on mic-intent. Int8 `.ort` conversions (sherpa-onnx) or batch-EN-int8 for the clips path are the levers if 139MB proves too heavy |
+| Browser cold start (EN streaming `.ort` 112MB fp32 + AR streaming `.ort` 32MB) | ~144MB download + 1–3s session init; warm ~0.5–2s | measured artifact sizes (spike); preload on mic-intent. Int8 `.ort` conversions (sherpa-onnx) or batch-EN-int8 for the clips path are the levers if 144MB proves too heavy |
 | Live TTFT, local streaming | **~0.3–0.6s** (no network) | 200ms frontend buffer + 80ms lookahead + decode step; vendor C++ claims <200ms |
 | 10s note, browser WASM | ~1–4s | ≈5× less compute than whisper-tiny (no 30s padding); whisper-tiny WASM ≈ real-time |
 | 10s note, runner slot 1 | ~0.5–2s e2e | upload (opus ~100KB) + native-CPU inference (~2–4× WASM) |
@@ -343,10 +347,9 @@ loops on every HF-checkpoint export is closed on the runner.
 (MIT), and the B.2 decoder probes + real-model smoke resolved every decode-loop
 shape question (streaming self-KV `[6,1,8,0,40]`, batch past `[1,8,0,36]`, and the
 cache-branch encoder-KV quirk above — both families now transcribe real audio
-end-to-end). Remaining gates: the `tiny-ar` "other" license text (before any *public*
-image distribution — internal bake and npm-free fetching are fine) and `stt-lab`'s
-dialect verdict. Track 1 (int8) is mostly free on the
-AR/batch side (int8 exports exist); EN streaming `.ort` ships fp32 — int8 conversions
+end-to-end). Remaining gates: `stt-lab`'s dialect verdict (the `tiny-ar` license gate
+closed with that model's removal — every baked artifact is now MIT). Track 1 (int8):
+base-EN already ships int8; EN streaming `.ort` ships fp32 — int8 conversions
 are a size optimization, not a blocker.
 **Done when:** v0 — file STT via gateway with graceful degradation; v0.5 — runner serves
 `/transcribe` at parity with the browser path; v1 — local streaming passes the

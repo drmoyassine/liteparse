@@ -73,15 +73,15 @@ describe("toMoonshineUrl", () => {
 
   it("serves tokenizer + streaming-config same-origin (pinned decode tables)", () => {
     const en = MOONSHINE_MODELS["moonshine-streaming-tiny-en"]!;
-    const ar = MOONSHINE_MODELS["moonshine-batch-tiny-ar"]!;
+    const enBatch = MOONSHINE_MODELS["moonshine-batch-base-en"]!;
     expect(toMoonshineUrl(moonshineDescriptor(en, "tokenizer"))).toBe(
       `${ORIGIN}/models/moonshine/streaming-tiny-en/tokenizer.json`,
     );
     expect(toMoonshineUrl(moonshineDescriptor(en, "streamingConfig"))).toBe(
       `${ORIGIN}/models/moonshine/streaming-tiny-en/streaming_config.json`,
     );
-    expect(toMoonshineUrl(moonshineDescriptor(ar, "tokenizer"))).toBe(
-      `${ORIGIN}/models/moonshine/batch-tiny-ar/tokenizer.json`,
+    expect(toMoonshineUrl(moonshineDescriptor(enBatch, "tokenizer"))).toBe(
+      `${ORIGIN}/models/moonshine/batch-base-en/tokenizer.json`,
     );
   });
 
@@ -100,12 +100,12 @@ describe("createMoonshineModelOrigin", () => {
     const fetchMock = vi.fn(async () => new Response(bytes(64)));
     vi.stubGlobal("fetch", fetchMock);
     const out = await createMoonshineModelOrigin().fetchModel({
-      id: "moonshine-batch-tiny-ar/encoder",
+      id: "moonshine-batch-base-en/encoder",
       version: "1.0.0",
     });
     expect(out).toHaveLength(64);
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://huggingface.co/onnx-community/moonshine-tiny-ar-ONNX/resolve/main/onnx/encoder_model_int8.onnx",
+      "https://huggingface.co/onnx-community/moonshine-base-ONNX/resolve/main/onnx/encoder_model_int8.onnx",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });

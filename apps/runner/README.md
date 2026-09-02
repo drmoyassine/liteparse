@@ -105,7 +105,7 @@ POST the WAV. Anything else → `422` naming the contract.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `options.language` | `"en" \| "ar"` | `"en"` | Picks the slot-1 model (EN streaming tiny / AR tiny int8) |
+| `options.language` | `"en" \| "ar"` | `"en"` | Picks the slot-1 model (EN/AR streaming tiny) |
 | `options.keepDiacritics` | boolean | `false` | Default strips Arabic tashkeel |
 | `options.stt` | object | — | **Escalation-only** external gateway (below). Without it the runner is local-only: best-effort text + honest warnings, never an external call |
 
@@ -126,7 +126,7 @@ POST the WAV. Anything else → `422` naming the contract.
 |---|---|---|
 | `text` | string | Transcript. Empty string + warnings = honest no-speech |
 | `language` | string | `"en"` \| `"ar"` |
-| `engine` | string | Model id that produced the text (`moonshine-streaming-tiny-en`, `moonshine-streaming-tiny-ar`, `moonshine-batch-tiny-ar`, `moonshine-batch-base-en`) or `stt-gateway` |
+| `engine` | string | Model id that produced the text (`moonshine-streaming-tiny-en`, `moonshine-streaming-tiny-ar`, `moonshine-batch-base-en`) or `stt-gateway` |
 | `confidence` | number \| null | Local mean per-token probability (floors: 0.55 uncalibrated); `null` when the external gateway produced the text |
 | `warnings` | string[] | Every escalation hop that didn't clear its floor, and the best-effort note if nothing did |
 | `duration_ms` | number | Server-side wall time |
@@ -145,7 +145,7 @@ sizes both.
 Unauthenticated (uptime probes):
 
 ```json
-{ "ok": true, "version": "0.2.2", "uptime_s": 3600, "ocr": "ready", "stt": "ready" }
+{ "ok": true, "version": "0.2.3", "uptime_s": 3600, "ocr": "ready", "stt": "ready" }
 ```
 
 `ocr: "unavailable"` means models failed to load — parses still work for
@@ -216,7 +216,7 @@ docker run -e PARSE_RUNNER_API_KEY=... -p 3000:3000 liteparse-runner
 
 The image fetches sha256-pinned models at build (see the `models` stage —
 pins printed by `npm run fetch-models` / `npm run fetch-moonshine-models`; the
-Moonshine set is ~231 MB on top of PP-OCR's ~15 MB; the AR streaming slot is
+Moonshine set is ~200 MB on top of PP-OCR's ~15 MB; the AR streaming slot is
 the official Useful Sensors artifacts — MIT, fetched from our byte-identical
 HF mirror since the official CDN sends no CORS headers; never npm-redistributed
 either way, the npm package stays model-free). `file:../..` is installed

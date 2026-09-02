@@ -18,11 +18,11 @@
  *       an earlier note here wrongly said Community License). Same five-graph
  *       layout as EN plus one quirk: the frontend ships as graph + weights
  *       pair (see frontendWeights below).
- *   AR  batch tiny int8 — onnx-community/moonshine-tiny-ar-ONNX (license
- *       "other": fetched/baked, never npm-redistributed). Encoder input is RAW
- *       waveform (`input_values`); past-KV layout is transformers.js [1,heads,T,headDim].
- *   EN  batch base int8 — onnx-community/moonshine-base-ONNX (MIT); same export
- *       family as AR batch (config: 8 layers × 8 heads × 52, positions ≤ 512).
+ *   EN  batch base int8 — onnx-community/moonshine-base-ONNX (MIT). Encoder
+ *       input is RAW waveform (`input_values`); past-KV layout is transformers.js
+ *       [1,heads,T,headDim] (config: 8 layers × 8 heads × 52, positions ≤ 512).
+ *       (An AR batch sibling, moonshine-batch-tiny-ar, was removed 2026-09-03:
+ *       license "other", superseded by the streaming set on every tier.)
  */
 
 export type SttLanguage = "en" | "ar";
@@ -115,28 +115,6 @@ export const MOONSHINE_MODELS: Record<string, MoonshineModelDescriptor> = {
     bosId: 1,
     eosId: 2,
     maxTokens: 512,
-  },
-  "moonshine-batch-tiny-ar": {
-    id: "moonshine-batch-tiny-ar",
-    label: "Moonshine tiny (AR) int8",
-    language: "ar",
-    variant: "batch",
-    repo: "onnx-community/moonshine-tiny-ar-ONNX",
-    dir: "batch-tiny-ar",
-    files: {
-      encoder: { repoPath: "onnx/encoder_model_int8.onnx", file: "encoder_model_int8.onnx" },
-      decoder: {
-        repoPath: "onnx/decoder_model_merged_int8.onnx",
-        file: "decoder_model_merged_int8.onnx",
-      },
-      tokenizer: { repoPath: "tokenizer.json", file: "tokenizer.json" },
-    },
-    // generation_config.json: bos 1 / eos 2 / max_length 194.
-    bosId: 1,
-    eosId: 2,
-    maxTokens: 194,
-    // Probed: present.* come back [1,8,t,36]; 6 layers (present.0–5); hidden 288.
-    batch: { depth: 6, heads: 8, headDim: 36, hiddenSize: 288 },
   },
   "moonshine-batch-base-en": {
     id: "moonshine-batch-base-en",

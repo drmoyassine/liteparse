@@ -16,12 +16,12 @@ import { MOONSHINE_MODELS, fileUrl, type MoonshineModelDescriptor } from "./shar
  * `<origin>/models/moonshine/<dir>/` (the runner fetch script documents the
  * same files). A consumer wanting full pinning injects their own ModelOrigin.
  *
- * AR batch tiny is license "other" (onnx-community), and the AR STREAMING set
- * is official Useful Sensors output under MIT, fetched from a byte-identical
- * HF mirror (Drmoyassine/moonshine-streaming-tiny-ar-ort — the official CDN
- * sends no CORS headers; the mirror is what makes the browser default
- * possible; see shared/models.ts): browser download is use, never
- * npm-redistribution — same stance as PP-OCR today.
+ * The AR STREAMING set is official Useful Sensors output under MIT, fetched
+ * from a byte-identical HF mirror (Drmoyassine/moonshine-streaming-tiny-ar-ort
+ * — the official CDN sends no CORS headers; the mirror is what makes the
+ * browser default possible; see shared/models.ts). Browser download is use,
+ * never npm-redistribution — same stance as PP-OCR today. (The license-"other"
+ * AR batch model was removed from the set 2026-09-03; every remaining id is MIT.)
  */
 
 /**
@@ -57,7 +57,7 @@ function isSidecarRole(role: string): boolean {
  * Map descriptor.id ("<modelId>/<role>") → its source URL.
  *
  *   moonshine-streaming-tiny-en/frontend → HF …/onnx/tiny/frontend.ort
- *   moonshine-batch-tiny-ar/tokenizer    → <own origin>/models/moonshine/batch-tiny-ar/tokenizer.json
+ *   moonshine-batch-base-en/tokenizer    → <own origin>/models/moonshine/batch-base-en/tokenizer.json
  */
 export function toMoonshineUrl(descriptor: ModelDescriptor): string {
   const slash = descriptor.id.indexOf("/");

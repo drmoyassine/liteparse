@@ -20,10 +20,9 @@
 # scripts/fetch-moonshine-models.mjs (which print them). The OCR det URL is NOT
 # the one the browser uses — its original mirror went 401 upstream (2026-08);
 # see src/engines/rapidocr/model-origin-hf.ts for history. Moonshine licenses:
-# streaming EN, streaming AR (official Useful Sensors artifacts, fetched from
-# our byte-identical HF mirror), and base EN are all MIT; AR batch is license
-# "other" (fetch/bake OK,
-# never npm-redistribute — noted in src/engines/moonshine/shared/models.ts).
+# every baked artifact is MIT — streaming EN, streaming AR (official Useful
+# Sensors artifacts, fetched from our byte-identical HF mirror), and base EN.
+# (The license-"other" AR batch model was removed from the set 2026-09-03.)
 # Download via node itself — debian slim ships no curl/wget.
 FROM node:22-slim AS models
 WORKDIR /models
@@ -88,14 +87,6 @@ const ARTIFACTS = [
   ["moonshine/streaming-tiny-ar", "decoder_kv.ort",
    "5c9a2bf2d9fc543fd4596b3ab4ab8d09f791aac5682eb1379fd8d59e34237db0",
    "https://huggingface.co/Drmoyassine/moonshine-streaming-tiny-ar-ort/resolve/main/decoder_kv.ort"],
-  // ── Moonshine tiny AR int8 (explicit-choice fallback, batch family)
-  //    — onnx-community, license "other" ──
-  ["moonshine/batch-tiny-ar", "encoder_model_int8.onnx",
-   "189c63a96dbedcbce32987ccb2ef52367b5392744fdc9b05f3d5442b0db4e85f",
-   "https://huggingface.co/onnx-community/moonshine-tiny-ar-ONNX/resolve/main/onnx/encoder_model_int8.onnx"],
-  ["moonshine/batch-tiny-ar", "decoder_model_merged_int8.onnx",
-   "c3d7481beb40f0880155195a12c619e035fd67249b8d0315d90f7f32dca4d380",
-   "https://huggingface.co/onnx-community/moonshine-tiny-ar-ONNX/resolve/main/onnx/decoder_model_merged_int8.onnx"],
   // ── Moonshine base EN int8 (slot 2) — onnx-community, MIT ──
   ["moonshine/batch-base-en", "encoder_model_int8.onnx",
    "4edb38db96b52ddee5a3b25d2211bb6394f9a9a2d95f67bce0e8c861da018a4d",
@@ -153,8 +144,8 @@ EOF
 # ── Stage 3: runtime ──────────────────────────────────────────────────────────
 FROM node:22-slim AS runtime
 WORKDIR /app
-# The Moonshine set is ~231 MB (streaming EN fp32 .ort + streaming AR official
-# int8 .ort + AR/base batch int8 .onnx) on top of PP-OCR's ~15 MB — cold start
+# The Moonshine set is ~200 MB (streaming EN fp32 .ort + streaming AR official
+# .ort + base-EN batch int8 .onnx) on top of PP-OCR's ~15 MB — cold start
 # pays session LOAD, not download.
 ENV NODE_ENV=production \
     PORT=3000 \

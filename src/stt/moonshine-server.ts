@@ -51,8 +51,7 @@ import {
  *   blob runs once at load and merges into every frontend call
  *   (bindFrontendWeights in shared/decode.ts).
  *
- *   batch (EN slot 2; AR slot 1 in the BROWSER engine only) — transformers.js-
- *   style int8 pair:
+ *   batch (runner EN slot 2 only — base-en) — transformers.js-style int8 pair:
  *     encoder(input_values = RAW waveform) → last_hidden_state[1,T,hidden]
  *     → decoder_merged(input_ids[1,1], past_key_values.* [1,heads,t,headDim],
  *                      use_cache_branch) → logits[1,1,vocab] + present.*
@@ -72,7 +71,6 @@ import {
  *     decoder_kv}.ort + tokenizer.json + streaming_config.json
  *     (official Useful Sensors artifacts, MIT — served from the byte-identical
  *     HF mirror; see engines/moonshine/shared/models.ts)
- *   batch-tiny-ar/{encoder_model_int8,decoder_model_merged_int8}.onnx + tokenizer.json
  *   batch-base-en/{encoder_model_int8,decoder_model_merged_int8}.onnx + tokenizer.json
  */
 
@@ -318,7 +316,7 @@ async function loadServer(explicitPath?: string): Promise<MoonshineServer> {
   if (!root) {
     throw new Error(
       "Moonshine models not found. Set MOONSHINE_MODEL_PATH or place models under ./models/moonshine " +
-        "(expected subdirs: streaming-tiny-en, streaming-tiny-ar, batch-tiny-ar, batch-base-en — " +
+        "(expected subdirs: streaming-tiny-en, streaming-tiny-ar, batch-base-en — " +
         "fetch via apps/runner/scripts/fetch-moonshine-models.mjs)",
     );
   }
