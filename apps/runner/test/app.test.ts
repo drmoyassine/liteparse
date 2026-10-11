@@ -46,7 +46,7 @@ function buildApp(over: { service?: ParseService; maxBytes?: number; maxConcurre
   return { app, service: service as ReturnType<typeof vi.fn> };
 }
 
-const KEY = { "x-api-key": "test-key-123", "content-type": "application/json" };
+const KEY = { "x-api-key": "test-key-123", "content-type": "application/json", accept: "application/json" };
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
 
 describe("GET /health", () => {
@@ -160,7 +160,7 @@ describe("POST /parse — contract", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual(
-      ["duration_ms", "kind", "page_count", "source", "text", "warnings"].sort(),
+      ["duration_ms", "kind", "page_count", "pages", "source", "text", "warnings"].sort(),
     );
     expect(body.text).toBe("hello fixture");
     expect(body.page_count).toBe(2); // pages.length, matching the edge function

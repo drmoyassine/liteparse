@@ -14,7 +14,7 @@
  * See ARCHITECTURE.md → Web Worker Architecture, ROADMAP.md → Phase 2.
  */
 
-import type { ParsedDocument } from "../types.js";
+import type { Page, ParsedDocument } from "../types.js";
 import type {
   DocumentProfile,
   ExtractionEngine,
@@ -47,6 +47,18 @@ export interface ParseRequest {
   readonly profile: DocumentProfile;
   /** The ordered execution plan to run. */
   readonly route: RouteDecision;
+  /** Limits and per-call options (worker defaults: 300 OCR pages, 2,000,000 chars). */
+  readonly options?: ParseRequestOptions;
+}
+
+/** Per-call options carried across the worker boundary (functions can't be). */
+export interface ParseRequestOptions {
+  maxPages?: number;
+  maxChars?: number;
+  perPageTimeoutMs?: number;
+  pageOutput?: "per-page" | "single";
+  languageHint?: string;
+  requestId?: string;
 }
 
 /** Cancel an in-flight job by id (AbortSignal can't cross the worker boundary). */
@@ -71,6 +83,13 @@ export interface ProgressEvent {
   readonly engine?: ExtractionEngine;
 }
 
+/** One finished page, delivered as soon as it is read (page-by-page delivery). */
+export interface PageEvent {
+  readonly type: "page";
+  readonly id: JobId;
+  readonly page: Page;
+}
+
 /** Success. The worker returns a full {@link ParsedDocument} so the client can
  *  use it directly (it already conforms to `parseDocument`'s return shape). */
 export interface ResultEvent {
@@ -90,12 +109,16 @@ export interface ErrorEvent {
   readonly stage?: ProgressStage;
 }
 
-export type WorkerOutbound = ProgressEvent | ResultEvent | ErrorEvent;
+export type WorkerOutbound = ProgressEvent | PageEvent | ResultEvent | ErrorEvent;
 
 // ─── Type guards ──────────────────────────────────────────────────────────────
 
 export function isProgress(m: WorkerOutbound): m is ProgressEvent {
   return m.type === "progress";
+}
+
+export function isPage(m: WorkerOutbound): m is PageEvent {
+  return m.type === "page";
 }
 
 export function isResult(m: WorkerOutbound): m is ResultEvent {

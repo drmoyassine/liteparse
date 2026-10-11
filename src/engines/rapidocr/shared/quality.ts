@@ -122,3 +122,13 @@ export function lengthWeightedConfidence(
   }
   return lenSum > 0 ? weightedConf / lenSum : 0;
 }
+
+/**
+ * Kept boxes below this confidence are "weak". Weak + dropped boxes making up a large
+ * share of a page (≥ {@link UNREADABLE_SCRIPT_RATIO}) means the Latin model is looking at a
+ * script it can't read (typically Arabic on a mixed EN/AR scan): the page is re-read
+ * with the Arabic model (runner) or sent on to vision (browser) instead of silently
+ * keeping the English and losing the Arabic.
+ */
+export const WEAK_BOX_CONFIDENCE = 0.8;
+export const UNREADABLE_SCRIPT_RATIO = 0.3;

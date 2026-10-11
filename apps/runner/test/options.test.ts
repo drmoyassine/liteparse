@@ -24,9 +24,9 @@ describe("toParseOptions — clamps", () => {
       signal,
       adapters,
     );
-    expect(o.maxPages).toBe(50);
+    expect(o.maxPages).toBe(300);
     expect(o.perPageTimeoutMs).toBe(120_000);
-    expect(o.maxChars).toBe(200_000);
+    expect(o.maxChars).toBe(2_000_000);
 
     const lo = toParseOptions("a.pdf", { maxPages: 0, perPageTimeoutMs: 10, maxChars: 1 }, signal, adapters);
     expect(lo.maxPages).toBe(1);
@@ -34,14 +34,14 @@ describe("toParseOptions — clamps", () => {
     expect(lo.maxChars).toBe(100);
   });
 
-  it("treats non-finite numbers as unset (library defaults apply)", () => {
+  it("treats non-finite numbers as unset (runner defaults apply)", () => {
     const o = toParseOptions(
       "a.pdf",
       { maxPages: Number.NaN, perPageTimeoutMs: Number.POSITIVE_INFINITY },
       signal,
       adapters,
     );
-    expect(o.maxPages).toBeUndefined();
+    expect(o.maxPages).toBe(300);
     expect(o.perPageTimeoutMs).toBe(DEFAULT_PER_PAGE_TIMEOUT_MS);
   });
 
@@ -49,9 +49,9 @@ describe("toParseOptions — clamps", () => {
     const o = toParseOptions("a.pdf", undefined, signal, adapters);
     expect(o.perPageTimeoutMs).toBe(60_000);
     expect(DEFAULT_PER_PAGE_TIMEOUT_MS).toBe(60_000);
-    // Unset budgets fall through as undefined so pipeline.ts applies its own defaults.
-    expect(o.maxPages).toBeUndefined();
-    expect(o.maxChars).toBeUndefined();
+    // 0.6: unset budgets take the runner's high defaults (300 OCR pages / 2,000,000 chars).
+    expect(o.maxPages).toBe(300);
+    expect(o.maxChars).toBe(2_000_000);
   });
 });
 

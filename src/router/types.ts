@@ -40,6 +40,7 @@ export type ExtractionEngine =
   | "pdfjs-text" // native text layer (digital PDFs)
   | "mammoth" // .docx
   | "xlsx" // .xlsx / .csv via sheetjs
+  | "office" // pptx / odt / odp / ods / rtf / doc / ppt / xls — pure-JS readers (formats/)
   | "text" // readAsText (.txt / .md / .csv)
   | "rapidocr" // PaddleOCR detection + recognition (raw text)
   | "granite-docling" // 258M structure-aware VLM (text + layout/tables/reading-order)

@@ -112,7 +112,7 @@ describe("executeRoute — text extractors", () => {
     expect(res.engine).toBe("mammoth");
     expect(res.document.source).toBe("native");
     expect(res.document.text).toBe("hello world");
-    expect(res.document.pages).toEqual([
+    expect(res.document.pages).toMatchObject([
       { index: 0, text: "hello world", source: "native" },
     ]);
     expect(res.document.meta.nativePages).toBe(1);
@@ -188,10 +188,11 @@ describe("executeRoute — OCR engines", () => {
     );
     expect(raster.calls).toBe(2);
     expect(res.engine).toBe("rapidocr");
+    // 0.6: per page — render a page only when it needs OCR, then recognise it.
     expect(stages).toEqual([
       "rendering:0/2",
-      "rendering:1/2",
       "rapidocr:0/2",
+      "rendering:1/2",
       "rapidocr:1/2",
     ]);
     expect(res.document.pages).toHaveLength(2);
@@ -356,12 +357,13 @@ describe("executeRoute — page budget & per-page timeout", () => {
         engines: { rapidocr: fakeEngine("rapidocr", "page text") },
       },
     );
-    // Only 2 of the 5 pages were rasterized — the budget bounded the work.
+    // Only 2 of the 5 pages were rasterized — the budget bounded the work. 0.6: the
+    // remaining pages are still listed (flagged, never silently dropped).
     expect(raster.calls).toBe(2);
-    expect(res.document.pages).toHaveLength(2);
-    expect(
-      res.document.warnings.some((w) => w.includes("page_budget") && w.includes("2 of 5")),
-    ).toBe(true);
+    expect(res.document.pages).toHaveLength(5);
+    expect(res.document.pages.filter((p) => p.text).length).toBe(2);
+    expect(res.document.pages[4]!.flags).toContain("ocr_skipped_budget:page_5");
+    expect(res.document.warnings).toContain("truncated_pages:ocr_budget_2");
     expect(res.engine).toBe("rapidocr");
   });
 
@@ -413,7 +415,7 @@ describe("executeRoute — audio (STT engines)", () => {
     expect(res.engine).toBe("moonshine");
     expect(res.document.source).toBe("stt");
     expect(res.document.text).toBe("transcribed words");
-    expect(res.document.pages).toEqual([
+    expect(res.document.pages).toMatchObject([
       { index: 0, text: "transcribed words", source: "stt" },
     ]);
     expect(res.document.meta.sttPages).toBe(1);

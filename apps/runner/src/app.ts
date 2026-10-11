@@ -4,11 +4,12 @@ import { swaggerUI } from "@hono/swagger-ui";
 import { createApiKeyAuth } from "./auth.js";
 import { createHealthHandler } from "./handlers/health.js";
 import { createParseHandler } from "./handlers/parse.js";
+import { createOcrHandler } from "./handlers/ocr.js";
 import { createTranscribeHandler } from "./handlers/transcribe.js";
 import type { Semaphore } from "./limits.js";
 import { createSemaphore } from "./limits.js";
 import { createOpenApiDocument } from "./openapi.js";
-import type { ParseService } from "./service.js";
+import type { OcrPageService, ParseService } from "./service.js";
 import type { SttService } from "./stt-service.js";
 
 /**
@@ -22,8 +23,17 @@ export interface AppDeps {
   service: ParseService;
   /** /transcribe service (the STT escalation walk). */
   sttService: SttService;
+  /** POST /ocr — one page image through RapidOCR (browser → runner fallback). */
+  ocrService?: OcrPageService;
   maxBytes?: number;
+  /** Whole-request budget in json mode. */
   maxTotalMs?: number;
+  /** Per-page budget in stream mode (no single limit covers the whole document). Default 120 s. */
+  maxPageMs?: number;
+  /** Default response mode (RUNNER_RESPONSE_MODE); per request via Accept. Default "stream". */
+  responseMode?: "stream" | "json";
+  /** Default page output (RUNNER_PAGE_OUTPUT); per request via options.pageOutput. Default "per-page". */
+  pageOutput?: "per-page" | "single";
   /** Max decoded audio size for /transcribe (default 25 MB). */
   sttMaxBytes?: number;
   /** Hard wall-clock budget per /transcribe request (default 60 s). */
@@ -71,8 +81,19 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/parse", (c) => c.json({ error: "method not allowed — POST /parse" }, 405));
   app.post("/parse", createParseHandler({
     service: deps.service,
-    maxBytes: deps.maxBytes ?? 20 * 1024 * 1024,
+    maxBytes: deps.maxBytes ?? 100 * 1024 * 1024,
     maxTotalMs: deps.maxTotalMs ?? 110_000,
+    maxPageMs: deps.maxPageMs ?? 120_000,
+    responseMode: deps.responseMode ?? "stream",
+    pageOutput: deps.pageOutput ?? "per-page",
+    limiter,
+  }));
+
+  app.use("/ocr", requireKey);
+  app.post("/ocr", createOcrHandler({
+    service: deps.ocrService,
+    maxBytes: 25 * 1024 * 1024,
+    maxTotalMs: deps.maxPageMs ?? 120_000,
     limiter,
   }));
 

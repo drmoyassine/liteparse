@@ -16,6 +16,8 @@ import {
   OCR_CONFIDENCE_FLOOR,
   PER_BOX_CONFIDENCE_FLOOR,
   MIN_BOX_SIDE_PX,
+  UNREADABLE_SCRIPT_RATIO,
+  WEAK_BOX_CONFIDENCE,
   type TextBox,
 } from "../engines/rapidocr/shared/quality.js";
 
@@ -75,14 +77,20 @@ type Canvas2D = any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Canvas = any;
 
-interface ServerModel {
-  ort: OrtModule;
-  det: OrtSession;
+/** One recognition model (rec session + its CTC dictionary). */
+interface RecModel {
   rec: OrtSession;
   /** Rec dictionary lines (CTC labels 1..N; blank@0, space LAST — see shared/ctc-decode). */
   dict: string[];
-  /** Per-engine CTC decoder (owns the one-shot layout log). */
+  /** Per-model CTC decoder (owns the one-shot layout log). */
   ctcDecoder: ReturnType<typeof createCtcDecoder>;
+}
+
+interface ServerModel extends RecModel {
+  ort: OrtModule;
+  det: OrtSession;
+  /** Arabic PP-OCRv5 recognition model — loaded when its files sit next to the English one. */
+  arabic: RecModel | null;
   /** @napi-rs/canvas helpers, loaded once with the models. */
   loadImage: (src: Uint8Array) => Promise<CanvasImage>;
   createCanvas: (w: number, h: number) => Canvas;
@@ -100,6 +108,10 @@ export interface RapidOcrServerOptions {
   recModel?: string;
   /** Dictionary file for recognition (default: "ppocr-en-dict.txt") */
   dictFile?: string;
+  /** Arabic recognition model filename (default: "arabic_PP-OCRv5_rec_mobile.onnx"; skipped when absent). */
+  arabicRecModel?: string;
+  /** Arabic dictionary filename (default: "ppocrv5-arabic-dict.txt"). */
+  arabicDictFile?: string;
   /** DB post-processing thresholds (defaults: DEFAULT_DB_PARAMS). */
   dbParams?: Partial<DBParams>;
   /** Emit OCR telemetry (default true). */
@@ -142,10 +154,13 @@ function createEngine(model: ServerModel, opts: RapidOcrServerOptions): RapidOcr
   return {
     name: "rapidocr-server",
     available: true,
+    scripts: model.arabic ? ["latin", "arabic"] : ["latin"],
 
     async recognize(image: Uint8Array, ctx: OcrContext): Promise<OcrResult> {
       if (ctx.signal?.aborted) throw new Error("aborted");
       const tTotal = performance.now();
+      const useArabic = ctx.script === "arabic" && model.arabic !== null;
+      const recModel: RecModel = useArabic ? model.arabic! : model;
 
       // Decode the rastered page (PNG/JPEG bytes) via @napi-rs/canvas (skia).
       const img = await model.loadImage(
@@ -153,12 +168,43 @@ function createEngine(model: ServerModel, opts: RapidOcrServerOptions): RapidOcr
       );
 
       // Full det+rec with the shared gates (sets docConfidence).
-      const { kept, docConfidence } = await recognizeImage(model, img, dbParams, ctx.signal);
+      const rec = await recognizeImage(model, recModel, img, dbParams, ctx.signal);
+      let { kept, docConfidence } = rec;
+      const { totalBoxes, droppedBoxes } = rec;
+      let script = useArabic ? "arabic" : "latin";
+      if (useArabic) for (const b of kept) b.text = reverseArabic(b.text || "");
+      const weak = (b: TextBox) => (b.recConf ?? 0) < WEAK_BOX_CONFIDENCE;
+      const weakBoxes = rec.recBoxes.filter(weak).length;
+      // Mixed EN/AR page: the Latin model dropped or barely read a large share of boxes →
+      // re-read exactly those boxes with the Arabic model, keep whichever read is more confident.
+      if (!useArabic && model.arabic && totalBoxes >= 2 && weakBoxes / totalBoxes >= UNREADABLE_SCRIPT_RATIO) {
+        let swapped = 0;
+        for (const box of rec.recBoxes.filter(weak)) {
+          try {
+            const ar = await recognizeBox(model, model.arabic, box, img);
+            if (ar.confidence > (box.recConf ?? 0)) {
+              box.text = reverseArabic(ar.text);
+              box.recConf = ar.confidence;
+              swapped++;
+            }
+          } catch {
+            // keep the Latin read
+          }
+        }
+        if (swapped > 0) {
+          kept = rec.recBoxes.filter((b) => (b.recConf ?? 0) >= PER_BOX_CONFIDENCE_FLOOR);
+          docConfidence = lengthWeightedConfidence(kept);
+          script = "mixed";
+          dbg(`[rapidocr-server] mixed-script page: ${swapped}/${weakBoxes} weak boxes re-read with the Arabic model`);
+        }
+      }
 
       // Reading order before joining — detection returns score order, which scrambles lines.
-      const text = readingOrderSort(kept)
+      const sorted = readingOrderSort(kept);
+      const text = (useArabic ? rtlRows(sorted) : sorted)
         .map((b) => b.text || "")
         .join("\n");
+      const stats = { totalBoxes, droppedBoxes, weakBoxes, script };
 
       dbg(
         `[rapidocr-server] end-to-end ${(performance.now() - tTotal).toFixed(0)}ms: ` +
@@ -174,15 +220,16 @@ function createEngine(model: ServerModel, opts: RapidOcrServerOptions): RapidOcr
           `[rapidocr-server] Confidence gate TRIPPED: doc conf ${docConfidence.toFixed(3)} < ` +
             `floor ${OCR_CONFIDENCE_FLOOR} — discarding ${text.length} chars, escalating via under-yield.`
         );
-        return { text: "", confidence: docConfidence };
+        return { text: "", confidence: docConfidence, ...stats };
       }
 
-      return { text, confidence: docConfidence };
+      return { text, confidence: docConfidence, ...stats };
     },
 
     dispose() {
       void model.det?.release();
       void model.rec?.release();
+      void model.arabic?.rec?.release();
       if (singletonModel === model) {
         singletonModel = null;
         singletonPromise = null;
@@ -203,12 +250,46 @@ const REC_HEIGHT = 48;
 /** Rec input width cap. */
 const REC_MAX_WIDTH = 2048;
 
+/**
+ * PaddleOCR `pred_reverse` for Arabic: the rec model emits characters in visual
+ * (left-to-right image) order; reverse to logical order while keeping Latin/digit
+ * runs intact.
+ */
+export function reverseArabic(pred: string): string {
+  const parts: string[] = [];
+  let run = "";
+  for (const c of pred) {
+    if (/[a-zA-Z0-9 :*./%+-]/.test(c)) run += c;
+    else {
+      if (run) parts.push(run);
+      parts.push(c);
+      run = "";
+    }
+  }
+  if (run) parts.push(run);
+  return parts.reverse().join("");
+}
+
+/** Arabic reading order: boxes on the same row read right-to-left. */
+function rtlRows(sorted: TextBox[]): TextBox[] {
+  const rows: TextBox[][] = [];
+  const cy = (b: TextBox) => b.points.reduce((a, p) => a + p[1]!, 0) / b.points.length;
+  const h = (b: TextBox) => Math.max(...b.points.map((p) => p[1]!)) - Math.min(...b.points.map((p) => p[1]!));
+  for (const b of sorted) {
+    const row = rows[rows.length - 1];
+    if (row && Math.abs(cy(row[0]!) - cy(b)) < h(row[0]!) / 2) row.push(b);
+    else rows.push([b]);
+  }
+  return rows.flatMap((r) => r.reverse());
+}
+
 async function recognizeImage(
   model: ServerModel,
+  recModel: RecModel,
   img: CanvasImage,
   dbParams: DBParams,
   signal?: AbortSignal,
-): Promise<{ kept: TextBox[]; docConfidence: number }> {
+): Promise<{ kept: TextBox[]; recBoxes: TextBox[]; docConfidence: number; totalBoxes: number; droppedBoxes: number }> {
   const boxes = await detect(model, img, dbParams);
 
   // Pre-recognition geometry filter: drop boxes too small to hold legible text BEFORE paying
@@ -221,7 +302,7 @@ async function recognizeImage(
   for (const box of recBoxes) {
     if (signal?.aborted) throw new Error("aborted");
     try {
-      const { text, confidence } = await recognizeBox(model, box, img);
+      const { text, confidence } = await recognizeBox(model, recModel, box, img);
       box.text = text;
       box.recConf = confidence;
       recCount++;
@@ -260,7 +341,7 @@ async function recognizeImage(
       .join("\n")
   );
 
-  return { kept, docConfidence };
+  return { kept, recBoxes, docConfidence, totalBoxes: recBoxes.length, droppedBoxes: droppedLowConf };
 }
 
 async function detect(model: ServerModel, img: CanvasImage, dbParams: DBParams): Promise<TextBox[]> {
@@ -387,6 +468,7 @@ function prepareRecRow(model: ServerModel, cropped: Canvas, targetW: number): Fl
  * runner's recognizeAll for the measured rationale) → single session.run → CTC decode. */
 async function recognizeBox(
   model: ServerModel,
+  recModel: RecModel,
   box: TextBox,
   img: CanvasImage,
 ): Promise<{ text: string; confidence: number }> {
@@ -396,14 +478,14 @@ async function recognizeBox(
   const data = prepareRecRow(model, cropped, recW);
 
   const input = new model.ort.Tensor("float32", data, [1, 3, REC_HEIGHT, recW]);
-  const recInputName = model.rec.inputNames[0] as string;
-  const outputs = (await model.rec.run({ [recInputName]: input })) as Record<
+  const recInputName = recModel.rec.inputNames[0] as string;
+  const outputs = (await recModel.rec.run({ [recInputName]: input })) as Record<
     string,
     { dims: number[]; data: Float32Array }
   >;
-  const output = outputs[model.rec.outputNames[0] as string]!; // shape: [1, seq_len, num_chars]
+  const output = outputs[recModel.rec.outputNames[0] as string]!; // shape: [1, seq_len, num_chars]
 
-  return model.ctcDecoder.decodeRow({ dims: output.dims, data: output.data }, 0);
+  return recModel.ctcDecoder.decodeRow({ dims: output.dims, data: output.data }, 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -452,8 +534,22 @@ async function loadServerModel(opts: RapidOcrServerOptions): Promise<ServerModel
   ]);
   const ctcDecoder = createCtcDecoder(dict, { debug: DEBUG });
 
-  dbg(`[rapidocr-server] init ${(performance.now() - tInit).toFixed(0)}ms (${detPath})`);
-  return { ort, det, rec, dict, ctcDecoder, loadImage, createCanvas };
+  // Arabic PP-OCRv5 rec (same det model — detection is script-agnostic). Optional.
+  let arabic: RecModel | null = null;
+  const arRecPath = resolve(modelPath, opts.arabicRecModel ?? "arabic_PP-OCRv5_rec_mobile.onnx");
+  const arDictPath = resolve(modelPath, opts.arabicDictFile ?? "ppocrv5-arabic-dict.txt");
+  if (existsSync(arRecPath) && existsSync(arDictPath)) {
+    const [arRec, arDict] = await Promise.all([
+      ort.InferenceSession.create(arRecPath, { executionProviders: ["cpu"] }),
+      loadDict(arDictPath),
+    ]);
+    arabic = { rec: arRec, dict: arDict, ctcDecoder: createCtcDecoder(arDict, { debug: DEBUG }) };
+  } else {
+    dbg(`[rapidocr-server] Arabic rec model not found (${arRecPath}) — Latin only`);
+  }
+
+  dbg(`[rapidocr-server] init ${(performance.now() - tInit).toFixed(0)}ms (${detPath})${arabic ? " + arabic" : ""}`);
+  return { ort, det, rec, dict, ctcDecoder, arabic, loadImage, createCanvas };
 }
 
 async function detectModelPath(explicitPath?: string): Promise<string | null> {

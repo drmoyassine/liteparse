@@ -87,6 +87,7 @@ import {
   PER_BOX_CONFIDENCE_FLOOR,
   MIN_BOX_SIDE_PX,
   type TextBox,
+  WEAK_BOX_CONFIDENCE,
 } from "./shared/quality.js";
 
 // ── Telemetry gate ─────────────────────────────────────────────────────────────
@@ -150,6 +151,8 @@ export class RapidOcrRunner {
   /** Most recent document-level recognition confidence (length-weighted per-box mean). Read
    *  by the OcrRunner adapter to apply the {@link OCR_CONFIDENCE_FLOOR} gate. */
   docConfidence = 0;
+  /** Box stats of the last page (feeds the cascade's unreadable-script signal). */
+  lastStats = { totalBoxes: 0, droppedBoxes: 0, weakBoxes: 0 };
   /** True once init() has loaded both sessions + the dict (used by the adapter to label
    *  end-to-end timing cold vs warm). */
   get ready(): boolean {
@@ -508,6 +511,11 @@ export class RapidOcrRunner {
     // → escalate).
     const kept = recBoxes.filter((b) => (b.recConf ?? 0) >= PER_BOX_CONFIDENCE_FLOOR);
     const droppedLowConf = recBoxes.length - kept.length;
+    this.lastStats = {
+      totalBoxes: recBoxes.length,
+      droppedBoxes: droppedLowConf,
+      weakBoxes: recBoxes.filter((b) => (b.recConf ?? 0) < WEAK_BOX_CONFIDENCE).length,
+    };
 
     // Document-level confidence: length-weighted mean over the KEPT (confident) boxes only.
     this.docConfidence = lengthWeightedConfidence(kept);
@@ -820,14 +828,14 @@ export function createRapidOcrRunner(opts?: {
           `(risk ${((1 - conf) * 100).toFixed(1)}% > ${((1 - OCR_CONFIDENCE_FLOOR) * 100).toFixed(0)}%) — ` +
           `discarding ${text.length} chars of OCR text, escalating to edge VLM via under-yield.`
         );
-        return { text: "", confidence: conf };
+        return { text: "", confidence: conf, ...runner.lastStats, script: "latin" };
       }
 
       dbg(
         "[RapidOcrRunner] Final OCR text length:", text.length,
         "conf:", conf.toFixed(3)
       );
-      return { text, confidence: conf };
+      return { text, confidence: conf, ...runner.lastStats, script: "latin" };
     },
 
     dispose() {

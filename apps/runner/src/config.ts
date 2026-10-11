@@ -25,6 +25,23 @@ export interface RunnerConfig {
   sttMaxBytes: number;
   /** Hard wall-clock budget per /transcribe request. */
   sttMaxTotalMs: number;
+  /** Per-page budget in stream mode. */
+  maxPageMs: number;
+  /** RUNNER_RESPONSE_MODE — default response for /parse (Accept header overrides). */
+  responseMode: "stream" | "json";
+  /** RUNNER_PAGE_OUTPUT — default page shape (options.pageOutput overrides). */
+  pageOutput: "per-page" | "single";
+  /** OCR/vision page budget and character cap ceilings (defaults 300 / 2,000,000). */
+  maxOcrPages: number;
+  maxChars: number;
+  /** LibreOffice fallback for office files the direct readers can't handle. */
+  libreoffice: {
+    mode: "off" | "lazy" | "preinstalled";
+    archiveUrl?: string;
+    archiveSha256?: string;
+    cacheDir: string;
+    bin?: string;
+  };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): RunnerConfig {
@@ -42,9 +59,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RunnerConfig {
     moonshineModelPath: env.MOONSHINE_MODEL_PATH?.trim() || undefined,
     maxConcurrency: intEnv(env.RUNNER_MAX_CONCURRENCY, 2),
     maxTotalMs: intEnv(env.RUNNER_MAX_TOTAL_MS, 110_000),
-    maxBytes: intEnv(env.RUNNER_MAX_BYTES, 20 * 1024 * 1024),
+    maxBytes: intEnv(env.RUNNER_MAX_BYTES, 100 * 1024 * 1024),
     sttMaxBytes: intEnv(env.RUNNER_STT_MAX_BYTES, 25 * 1024 * 1024),
     sttMaxTotalMs: intEnv(env.RUNNER_STT_MAX_TOTAL_MS, 60_000),
+    maxPageMs: intEnv(env.RUNNER_MAX_PAGE_MS, 120_000),
+    responseMode: env.RUNNER_RESPONSE_MODE?.trim() === "json" ? "json" : "stream",
+    pageOutput: env.RUNNER_PAGE_OUTPUT?.trim() === "single" ? "single" : "per-page",
+    maxOcrPages: intEnv(env.RUNNER_MAX_OCR_PAGES, 300),
+    maxChars: intEnv(env.RUNNER_MAX_CHARS, 2_000_000),
+    libreoffice: {
+      mode: (["off", "lazy", "preinstalled"] as const).find((m) => m === env.LIBREOFFICE_MODE?.trim()) ?? "lazy",
+      archiveUrl: env.LIBREOFFICE_ARCHIVE_URL?.trim() || undefined,
+      archiveSha256: env.LIBREOFFICE_ARCHIVE_SHA256?.trim().toLowerCase() || undefined,
+      cacheDir: env.LIBREOFFICE_CACHE_DIR?.trim() || "/data/libreoffice",
+      bin: env.LIBREOFFICE_BIN?.trim() || undefined,
+    },
   };
 }
 

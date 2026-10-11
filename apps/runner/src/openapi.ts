@@ -60,9 +60,12 @@ export function createOpenApiDocument(version: string): Record<string, unknown> 
           tags: ["parse"],
           summary: "Extract text from a document",
           description:
-            "Local-first cascade: native text layer → local PP-OCRv4 OCR → optional caller " +
-            "VLM fallback. Without options.vlm the runner never touches an external model. " +
-            "Empty text + warnings is an honest no-text result — surface the warnings, don't guess.",
+            "Per-page local-first cascade: each page's native text layer (quality-checked) → local " +
+            "RapidOCR (English PP-OCRv4 / Arabic PP-OCRv5) → Granite-Docling → optional caller vision " +
+            "(options.vlm or options.vlmEndpoint). Response mode: RUNNER_RESPONSE_MODE (default stream); " +
+            "`Accept: application/x-ndjson` streams one `{type:\"page\"}` line per page then a " +
+            "`{type:\"result\"}` line (per-page budget); `Accept: application/json` returns one body " +
+            "(whole-request deadline). Empty text + warnings is an honest no-text result.",
           requestBody: {
             required: true,
             content: {
@@ -74,12 +77,15 @@ export function createOpenApiDocument(version: string): Record<string, unknown> 
               description: "Extraction result (text may be empty — never fabricated)",
               content: {
                 "application/json": { schema: { $ref: "#/components/schemas/ParseResponse" } },
+                "application/x-ndjson": {
+                  schema: { type: "string", description: "NDJSON: {type:'page', ...Page} lines, then {type:'result', ...ParseResponse} or {type:'error', error}" },
+                },
               },
             },
             400: errorResponse("Non-JSON body, missing/empty data, invalid base64, 0-byte document"),
             401: errorResponse("Missing/wrong X-API-Key"),
             405: errorResponse("Non-POST on /parse"),
-            413: errorResponse("Decoded document over RUNNER_MAX_BYTES (20 MB default)"),
+            413: errorResponse("Decoded document over RUNNER_MAX_BYTES (100 MB default)"),
             503: {
               description: "Concurrency slots full — respects Retry-After: 2",
               headers: {
@@ -87,7 +93,43 @@ export function createOpenApiDocument(version: string): Record<string, unknown> 
               },
               content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
             },
-            500: errorResponse("Parse failed (incl. the 110 s whole-request deadline)"),
+            500: errorResponse("Parse failed (json mode: incl. the whole-request deadline)"),
+          },
+        },
+      },
+      "/ocr": {
+        post: {
+          tags: ["parse"],
+          summary: "OCR one page image (browser → runner fallback)",
+          description:
+            "Runs one PNG/JPEG page through the runner's RapidOCR with the English or Arabic model " +
+            "(`script`). Called by the AMS on behalf of the browser for pages it can't read locally.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["data"],
+                  properties: {
+                    data: { type: "string", contentEncoding: "base64" },
+                    script: { enum: ["latin", "arabic"] },
+                    pageNumber: { type: "integer" },
+                    totalPages: { type: "integer" },
+                    documentName: { type: "string" },
+                    requestId: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "{text, confidence, script, total_boxes, dropped_boxes, duration_ms}" },
+            400: errorResponse("Missing/invalid base64 data"),
+            401: errorResponse("Missing/wrong X-API-Key"),
+            413: errorResponse("Image over 25 MB"),
+            503: errorResponse("OCR not configured or concurrency slots full"),
+            500: errorResponse("OCR failed"),
           },
         },
       },
@@ -198,29 +240,55 @@ export function createOpenApiDocument(version: string): Record<string, unknown> 
         ParseOptions: {
           type: "object",
           properties: {
-            maxPages: { type: "integer", minimum: 1, maximum: 50, default: 20 },
+            maxPages: { type: "integer", minimum: 1, maximum: 300, default: 300, description: "OCR/vision page budget (native pages are free); ceiling RUNNER_MAX_OCR_PAGES" },
             perPageTimeoutMs: {
               type: "integer",
               default: 60000,
               description: "Clamped 1 s–120 s. Dense scans can take 20–30 s/page on the VLM leg",
             },
-            maxChars: { type: "integer", description: "Clamped 100k–200k (library default when omitted)" },
+            maxChars: { type: "integer", default: 2000000, description: "Clamped 100–RUNNER_MAX_CHARS (2,000,000)" },
+            pageOutput: { enum: ["per-page", "single"], description: "Default RUNNER_PAGE_OUTPUT (per-page)" },
+            languageHint: { type: "string", description: "ISO 639-1, e.g. 'ar' — OCR model for scanned pages" },
+            requestId: { type: "string", description: "AMS request id, passed to the vision step" },
             vlm: { $ref: "#/components/schemas/VlmConfig" },
+            vlmEndpoint: {
+              type: "object",
+              required: ["url"],
+              properties: { url: { type: "string" }, headers: { type: "object", additionalProperties: { type: "string" } } },
+              description: "AMS vision endpoint: receives {image, mime, pageNumber, script, language, reason, documentName, requestId}, returns {text}",
+            },
           },
         },
         ParseResponse: {
           type: "object",
-          required: ["text", "kind", "source", "page_count", "warnings", "duration_ms"],
+          required: ["text", "kind", "source", "page_count", "warnings", "duration_ms", "pages"],
           properties: {
             text: { type: "string", description: "Full extracted text (joined pages). Empty = nothing extractable" },
-            kind: { enum: ["pdf", "image", "docx", "xlsx", "csv", "other"] },
+            kind: { enum: ["pdf", "image", "docx", "xlsx", "csv", "pptx", "odt", "ods", "odp", "rtf", "doc", "xls", "ppt", "text", "audio", "other"] },
             source: {
-              enum: ["native", "ocr", "vlm", "none"],
+              enum: ["native", "ocr", "vlm", "mixed", "none"],
               description: "Which stage produced the text",
             },
             page_count: { type: "integer" },
             warnings: { type: "array", items: { type: "string" } },
             duration_ms: { type: "integer" },
+            pages: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  page: { type: "integer" },
+                  text: { type: "string" },
+                  method: { enum: ["native", "ocr", "vlm"] },
+                  engine: { type: "string" },
+                  reason: { type: "string" },
+                  script: { type: "string" },
+                  flags: { type: "array", items: { type: "string" } },
+                },
+              },
+            },
+            encoding: { type: "string" },
+            format: { type: "string" },
           },
         },
         TranscribeRequestBody: {

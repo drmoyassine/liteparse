@@ -2,7 +2,8 @@ import { serve } from "@hono/node-server";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createRapidOcrServerEngine } from "@drmoyassine/liteparse/ocr/rapidocr-server";
-import { createLiteparseService } from "./service.js";
+import { createLiteparseService, createOcrPageService } from "./service.js";
+import { createLibreOfficeConverter } from "./libreoffice.js";
 import { createSttService } from "./stt-service.js";
 
 /**
@@ -14,22 +15,30 @@ import { createSttService } from "./stt-service.js";
 
 // Keep in sync with apps/runner/package.json (not imported — bundling JSON into
 // the service bundle isn't worth it for a version string).
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 
 async function main(): Promise<void> {
   const config = loadConfig();
   let ocrReady = false;
   let sttReady = false;
 
-  const service = createLiteparseService();
+  const service = createLiteparseService({
+    limits: { maxOcrPages: config.maxOcrPages, maxChars: config.maxChars },
+    convertToPdf: createLibreOfficeConverter(config.libreoffice),
+  });
+  const ocrService = createOcrPageService();
   const sttService = createSttService({ modelPath: config.moonshineModelPath });
   const app = createApp({
     apiKey: config.apiKey,
     version: VERSION,
     service,
+    ocrService,
     sttService,
     maxBytes: config.maxBytes,
     maxTotalMs: config.maxTotalMs,
+    maxPageMs: config.maxPageMs,
+    responseMode: config.responseMode,
+    pageOutput: config.pageOutput,
     sttMaxBytes: config.sttMaxBytes,
     sttMaxTotalMs: config.sttMaxTotalMs,
     maxConcurrency: config.maxConcurrency,

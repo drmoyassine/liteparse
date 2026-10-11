@@ -26,6 +26,27 @@ Document bytes
   → execute (run the chosen strategy, with targeted fallback only)
 ```
 
+**0.6.0 — execute is per page.** For PDFs (and image frames) the router's strategy
+list becomes a *per-page* cascade: every page runs `pdfjs-text` first, its text is
+rebuilt with line breaks / spaces / paragraphs (pdfjs `hasEOL` + item positions,
+hyphen joins, RTL kept in logical order) and scored by the text-layer quality check
+(`src/text/quality.ts`). Only pages whose text is missing (`reason: scanned`) or
+suspect (`text_layer_suspect`, optionally `dictionary_suspect`) are rendered — one at a
+time — and sent down `rapidocr → granite-docling → vlm`. A re-read of a suspect page
+keeps whichever version scores better. The scanned/digital probe on pages 1–3 is now
+only an early routing estimate. Per page, the RapidOCR leg picks the model by script
+(`languageHint` → native script → document script) and runs on the runner
+(`runnerOcr`) when the browser has no model for that script or the route marks the
+leg `edge`. A RapidOCR read where ≥30% of boxes were dropped/weak is an "unreadable
+script" signal: the runner re-reads those boxes with the Arabic PP-OCRv5 model; the
+browser escalates to the runner, then vision. Pages are delivered through `onPage` /
+the worker `page` message / the runner's NDJSON stream; `pageOutput: "single"` only
+reshapes the result. Office kinds route to the `office` engine (`src/formats/`, pure
+JS: pptx/odt/odp/rtf/doc/ppt via JSZip + SheetJS CFB, ods/xls via SheetJS); when that
+read fails, under-yields, looks corrupted or is mostly pictures, an injected
+`convertToPdf` (runner LibreOffice) turns it into a PDF that re-enters the per-page
+cascade. See `src/worker/execute.ts`.
+
 Classification happens **at attach time** (overlaps with user typing their
 message), so by send time the route is already decided — zero classification
 latency at send.

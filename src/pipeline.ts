@@ -1,11 +1,10 @@
-import { decodeText, extractDocx, extractXlsx } from "./office.js";
-import { extractPageText, loadPdf } from "./pdf.js";
 import { resolveOcr, resolveRaster, resolveStt } from "./runtime.js";
 import { classifyDocument } from "./router/classify.js";
 import { detectCapabilities } from "./router/capabilities.js";
 import { routeDocument } from "./router/route.js";
 import { executeRoute } from "./worker/ocr-worker.js";
-import type { ExecuteRouteDeps, TextExtractor } from "./worker/ocr-worker.js";
+import { defaultExtractors } from "./worker/ocr-worker.js";
+import type { ExecuteRouteDeps } from "./worker/ocr-worker.js";
 import { createGraniteDoclingEngine } from "./ocr/granite-docling.js";
 import { createVlmOcrEngine } from "./ocr/vlm.js";
 import { createSttGatewayEngine, sttEngineAsOcr } from "./stt/engine.js";
@@ -90,21 +89,6 @@ function emptyResult(kind: DocKind, warnings: string[]): ParsedDocument {
   return { text: "", source: "none", pages: [], warnings, kind, meta };
 }
 
-/** Join every page's pdfjs text layer into one string (the pdfjs-text extractor). */
-async function joinPdfText(
-  bytes: Uint8Array,
-  pdfjs: ParseOptions["pdfjs"],
-  signal?: AbortSignal,
-): Promise<string> {
-  const { doc } = await loadPdf(bytes, pdfjs);
-  const parts: string[] = [];
-  for (let i = 1; i <= doc.numPages; i++) {
-    if (signal?.aborted) throw abortError();
-    parts.push(await extractPageText(await doc.getPage(i)));
-  }
-  return parts.join("\n\n");
-}
-
 /**
  * Build the injected {@link ExecuteRouteDeps} from {@link ParseOptions}: text
  * extractors from the office/pdf modules, OCR engines from the injected (or
@@ -141,19 +125,16 @@ async function buildRouteDeps(
     engines["stt-gateway"] = createSttGatewayEngine(opts.stt, opts.sttLanguage);
   }
 
-  const extractors: Partial<Record<ExtractionEngine, TextExtractor>> = {
-    mammoth: extractDocx,
-    xlsx: async (b) => extractXlsx(b),
-    text: async (b) => decodeText(b),
-    "pdfjs-text": async (b, ctx) => joinPdfText(b, opts.pdfjs, ctx?.signal),
-  };
-
   return {
     pdfjs: opts.pdfjs,
     raster,
     engines,
-    extractors,
+    extractors: defaultExtractors(),
     usableFloor: opts.ocrFloor ?? DEFAULTS.ocrFloor,
+    runnerOcr: opts.runnerOcr,
+    dictionary: opts.dictionary,
+    convertToPdf: opts.convertToPdf,
+    onPage: opts.onPage,
   };
 }
 
@@ -161,9 +142,18 @@ async function buildRouteDeps(
 function enforceMaxChars(doc: ParsedDocument, maxChars: number): ParsedDocument {
   if (doc.text.length <= maxChars) return doc;
   const text = doc.text.slice(0, maxChars);
+  // Trim pages to the cap too, so pages and text stay consistent.
+  let left = maxChars;
+  const pages = [];
+  for (const p of doc.pages) {
+    if (left <= 0) break;
+    pages.push(p.text.length <= left ? p : { ...p, text: p.text.slice(0, left) });
+    left -= p.text.length + 2;
+  }
   return {
     ...doc,
     text,
+    pages,
     warnings: [...doc.warnings, `truncated_chars:${doc.text.length}_to_${maxChars}`],
     meta: { ...doc.meta, truncated: true, chars: text.length },
   };
@@ -229,6 +219,10 @@ export async function parseDocument(
       signal: opts.signal,
       maxPages: opts.maxPages ?? DEFAULTS.maxPages,
       perPageTimeoutMs: opts.perPageTimeoutMs ?? DEFAULTS.perPageTimeoutMs,
+      maxChars,
+      pageOutput: opts.pageOutput,
+      languageHint: opts.languageHint,
+      requestId: opts.requestId,
     },
     deps,
   );

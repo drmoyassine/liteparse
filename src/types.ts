@@ -12,6 +12,14 @@ export type DocKind =
   | "docx"
   | "xlsx"
   | "csv"
+  | "pptx"
+  | "odt"
+  | "ods"
+  | "odp"
+  | "rtf"
+  | "doc"
+  | "xls"
+  | "ppt"
   | "image"
   | "text"
   | "audio"
@@ -23,12 +31,36 @@ export type PageSource = "native" | "ocr" | "vlm" | "stt";
 /** Document-level source, derived from the per-page sources. */
 export type DocumentSource = PageSource | "mixed" | "none";
 
+/** Why a page went down the cascade (absent ⇒ native text was accepted as-is). */
+export type PageReason =
+  | "scanned"
+  | "text_layer_suspect"
+  | "dictionary_suspect"
+  | "arabic_no_local_model"
+  | "ocr_low_confidence"
+  | "ocr_dropped_script"
+  | "image";
+
 /** A single extracted page. */
 export interface Page {
   /** 0-based page index (always 0 for non-paginated inputs). */
   index: number;
   text: string;
   source: PageSource;
+  /** 1-based real page / slide / frame number. */
+  pageNumber?: number;
+  /** Method that produced the text (same value as `source`, named for readability). */
+  method?: PageSource;
+  /** Engine that produced the text (e.g. "pdfjs-text", "rapidocr-server", "runner", "vlm"). */
+  engine?: string;
+  /** Why this page left the native path. */
+  reason?: PageReason;
+  /** Script detected / assumed for this page. */
+  script?: string;
+  /** 0–1 text-layer quality score of the kept text (native pages and re-reads). */
+  quality?: number;
+  /** Machine-readable per-page flags (`prefix:detail`). */
+  flags?: string[];
 }
 
 /** Per-page / aggregate counts. */
@@ -43,6 +75,10 @@ export interface ParsedMeta {
   sttPages: number;
   truncated: boolean;
   chars: number;
+  /** Detected text encoding (csv / text / rtf inputs). */
+  encoding?: string;
+  /** Concrete file format read (e.g. "pptx", "doc", "tiff"). */
+  format?: string;
 }
 
 /** The return value of {@link parseDocument}. Never thrown for content problems. */
@@ -66,7 +102,17 @@ export interface PdfDocumentLike {
 export interface PdfPageLike {
   getViewport: (opts: { scale: number }) => { width: number; height: number };
   render: (opts: Record<string, unknown>) => { promise: Promise<void> };
-  getTextContent: () => Promise<{ items: Array<{ str?: string }> }>;
+  getTextContent: () => Promise<{ items: Array<PdfTextItemLike> }>;
+}
+
+/** One pdfjs text item (TextItem) — only the fields the line rebuilder reads. */
+export interface PdfTextItemLike {
+  str?: string;
+  hasEOL?: boolean;
+  transform?: number[];
+  width?: number;
+  height?: number;
+  dir?: string;
 }
 
 /** Options passed to a raster adapter when rendering a page. */
@@ -88,6 +134,11 @@ export interface RasterAdapter {
     pageIndex: number,
     opts?: PreprocessOptions,
   ): Promise<Uint8Array>;
+  /**
+   * Convert a non-PNG/JPEG image (TIFF/BMP/GIF/WebP) to PNG — one entry per frame
+   * (multi-page TIFF). Optional: adapters without it pass the bytes through.
+   */
+  imageToPng?(bytes: Uint8Array, format: string): Promise<Uint8Array[]>;
   readonly available: boolean;
   readonly runtime: "browser" | "node" | "none";
   readonly name: string;
@@ -99,12 +150,30 @@ export interface OcrContext {
   totalPages: number;
   hint?: string;
   signal?: AbortSignal;
+  /** Script the page is expected to be in ("latin" | "arabic" | …) — selects the rec model. */
+  script?: string;
+  /** Why the page is being read (forwarded to vision gateways). */
+  reason?: PageReason;
+  /** Document name / AMS request id (forwarded to vision gateways). */
+  documentName?: string;
+  requestId?: string;
+  languageHint?: string;
 }
 
 export interface OcrResult {
   text: string;
   /** 0–1 confidence if the engine reports it. */
   confidence?: number;
+  /** Detected text boxes that were recognised (RapidOCR engines). */
+  totalBoxes?: number;
+  /** Boxes thrown away by the per-box confidence filter. */
+  droppedBoxes?: number;
+  /** Boxes read below the "weak" confidence (0.8), dropped ones included. */
+  weakBoxes?: number;
+  /** Script of the recognition model actually used. */
+  script?: string;
+  /** Engine-reported scripts it can read (lets the cascade skip a model that can't). */
+  scripts?: string[];
 }
 
 /** Recognises text in an image (PNG/JPEG bytes). Implementations: vlm, rapidocr, none. */
@@ -112,6 +181,8 @@ export interface OcrEngine {
   recognize(image: Uint8Array, ctx: OcrContext): Promise<OcrResult>;
   readonly available: boolean;
   readonly name: string;
+  /** Scripts this engine has recognition models for. Unset ⇒ ["latin"]. */
+  readonly scripts?: readonly string[];
 }
 
 /**
@@ -143,6 +214,18 @@ export interface VlmReadOptions {
   signal?: AbortSignal;
   /** MIME type of `png` bytes (often image/png, but image/jpeg for raw photos). */
   mime?: string;
+  /** 1-based real page number. */
+  pageNumber?: number;
+  /** Detected / hinted script of the page ("latin", "arabic", …). */
+  script?: string;
+  /** Caller language hint (ISO 639-1), when supplied. */
+  language?: string;
+  /** Why this page reached the vision step. */
+  reason?: PageReason;
+  /** Original document name. */
+  documentName?: string;
+  /** The AMS's own request id, passed through untouched. */
+  requestId?: string;
 }
 
 /**
@@ -253,6 +336,47 @@ export interface ParseOptions {
   signal?: AbortSignal;
   /** Minimum chars of OCR output before the page is considered well-read. Below this → VLM fallback. Default 3. */
   ocrFloor?: number;
+  /**
+   * Result shape. Processing is always per page; `"single"` merges every page into
+   * one entry (the pre-0.6 shape). Both shapes produce the same top-level `text`.
+   * Default `"per-page"`.
+   */
+  pageOutput?: "per-page" | "single";
+  /** Called once per finished page, in order (page-by-page delivery). */
+  onPage?: (page: Page) => void;
+  /** ISO 639-1 language hint from the caller (e.g. "ar") — picks the OCR script for scanned pages. */
+  languageHint?: string;
+  /** The caller's own request id — forwarded untouched to the vision step. */
+  requestId?: string;
+  /**
+   * OCR engine that runs on the self-hosted runner (browser → runner fallback), used for
+   * pages the router marks as "edge": a script with no local model (e.g. Arabic) or more
+   * pages than the browser cap. Build one with `createRunnerOcrEngine`.
+   */
+  runnerOcr?: OcrEngine;
+  /** Optional dictionary check (see `@drmoyassine/liteparse/dictionary`). Flags only, by default. */
+  dictionary?: DictionaryCheck;
+  /**
+   * Convert an office file to PDF (runner LibreOffice fallback). Returns null when
+   * conversion is unavailable. Used only when the direct read fails or under-yields.
+   */
+  convertToPdf?: (bytes: Uint8Array, filename: string | undefined, signal?: AbortSignal) => Promise<Uint8Array | null>;
+}
+
+/** Result of a dictionary check over one page of text. */
+export interface DictionaryReport {
+  /** Words checked. */
+  words: number;
+  /** Unknown words one edit away from a known word ("Accrtditation"). */
+  suspects: string[];
+  flagged: boolean;
+}
+
+/** Optional dictionary-based letter-swap detector. Never rewrites text. */
+export interface DictionaryCheck {
+  check(text: string): DictionaryReport;
+  /** Send flagged pages down the cascade instead of only flagging them. Default false. */
+  readonly escalate?: boolean;
 }
 
 /**

@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MODELS_DIR = resolve(HERE, "..", "models", "rapidocr");
 const DICT_SRC = resolve(HERE, "..", "models", "ppocr-en-dict.txt");
+const AR_DICT_SRC = resolve(HERE, "..", "models", "ppocrv5-arabic-dict.txt");
 
 const ARTIFACTS = [
   {
@@ -30,6 +31,12 @@ const ARTIFACTS = [
   {
     name: "en_PP-OCRv4_rec_infer.onnx",
     url: "https://huggingface.co/breezedeus/cnocr-ppocr-en_PP-OCRv4/resolve/main/en_PP-OCRv4_rec_infer.onnx",
+  },
+  {
+    // Official RapidAI Arabic PP-OCRv5 mobile rec (same det model — detection is script-agnostic).
+    // Its dictionary is committed: apps/runner/models/ppocrv5-arabic-dict.txt.
+    name: "arabic_PP-OCRv5_rec_mobile.onnx",
+    url: "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv5/rec/arabic_PP-OCRv5_rec_mobile.onnx",
   },
 ];
 
@@ -46,6 +53,7 @@ for (const art of ARTIFACTS) {
 }
 
 copyFileSync(DICT_SRC, resolve(MODELS_DIR, "ppocr-en-dict.txt"));
+copyFileSync(AR_DICT_SRC, resolve(MODELS_DIR, "ppocrv5-arabic-dict.txt"));
 console.log(`✓ models ready in ${MODELS_DIR}`);
 console.log("  (RAPIDOCR_MODEL_PATH should point here; the Dockerfile models stage pins these sha256s)");
 

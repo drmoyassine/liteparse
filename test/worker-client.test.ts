@@ -2,7 +2,7 @@
  * Tests for src/worker/worker-client.ts — job correlation, progress, result,
  * error, timeout, abort, and crash handling — against an in-process fake worker.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createWorkerOcrClient } from "../src/worker/worker-client.js";
 import type { WorkerLike } from "../src/worker/worker-client.js";
 import type { WorkerOutbound } from "../src/worker/protocol.js";
@@ -143,6 +143,27 @@ describe("createWorkerOcrClient", () => {
     expect(result.engine).toBe("rapidocr");
     void id;
   });
+
+  it("0.6: delivers each page via onPage and re-arms the idle timeout on every page", async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = new FakeWorker();
+      const client = createWorkerOcrClient({ worker: fake, timeoutMs: 1000 });
+      const pages: number[] = [];
+      const p = client.parse({ ...input(), options: { maxPages: 300, pageOutput: "single" } }, { onPage: (pg) => pages.push(pg.pageNumber!) });
+      const reqId = fake.lastParseId;
+      for (let n = 1; n <= 3; n++) {
+        vi.advanceTimersByTime(800); // under the idle budget each time, 2.4 s in total
+        fake.emit({ type: "page", id: reqId, page: { index: n - 1, pageNumber: n, text: `p${n}`, source: "native" } });
+      }
+      fake.emit({ type: "result", id: reqId, document: document("p1\n\np2\n\np3") });
+      await expect(p).resolves.toBeTruthy();
+      expect(pages).toEqual([1, 2, 3]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 
   it("rejects when the worker posts an error event", async () => {
     const fake = new FakeWorker();

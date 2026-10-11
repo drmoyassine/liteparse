@@ -1,5 +1,6 @@
 import mammoth from "mammoth";
 import * as XLSX from "xlsx";
+import { decodeWithDetection } from "./text/encoding.js";
 
 /**
  * Office + tabular text extraction (isomorphic: pure JS via mammoth + SheetJS).
@@ -9,9 +10,10 @@ import * as XLSX from "xlsx";
  *   `buffer` (that's the Node build's `Buffer` reader). JSZip accepts the
  *   ArrayBuffer unchanged.
  * - `.xlsx` → SheetJS, every sheet rendered to CSV and concatenated with headers
- * - `.csv` / text → decoded as UTF-8 (CSV is returned as-is; the caller treats it as text)
+ * - `.csv` / text → encoding detected first (UTF-8/BOM, UTF-16, windows-1256 /
+ *   iso-8859-6 Arabic, windows-1252), so the spreadsheet reader sees correct text
  *
- * Legacy `.doc`/`.xls` never reach here — sniff reports them as `other`.
+ * Other formats (pptx / ODF / rtf / doc / ppt / xls) live in ./formats/.
  */
 
 /** Extract plain text from a `.docx`. */
@@ -62,7 +64,16 @@ export function extractXlsx(bytes: Uint8Array): string {
   return parts.join("\n").trim();
 }
 
-/** Decode a UTF-8 byte array to a string (for `.csv` / plain text). */
+/** Decode text bytes with encoding detection (for `.csv` / plain text). */
 export function decodeText(bytes: Uint8Array): string {
-  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  return decodeWithDetection(bytes).text;
+}
+
+/** CSV: decode with the detected encoding BEFORE SheetJS sees it, then render rows. */
+export function extractCsv(bytes: Uint8Array): { text: string; encoding: string } {
+  const { text, encoding } = decodeWithDetection(bytes);
+  const wb = XLSX.read(text, { type: "string", raw: true });
+  const sheet = wb.Sheets[wb.SheetNames[0] ?? ""];
+  const csv = sheet ? XLSX.utils.sheet_to_csv(sheet, { blankrows: false }) : text;
+  return { text: csv.trim(), encoding };
 }

@@ -82,6 +82,15 @@ default (`RUNNER_MAX_CONCURRENCY` — the budget is **shared with
 leg only runs when local extraction yields nothing, so calls **without**
 `options.vlm` never touch an external model.
 
+### 0.4.0 (liteparse 0.6.0) additions
+
+- **Streaming `/parse`** (default): `application/x-ndjson`, one `{"type":"page","page":10,"text":…,"method":"ocr","reason":"scanned","script":"latin","flags":[]}` line per page, then `{"type":"result", …}` (the JSON body below plus `pages`), or `{"type":"error","error":…}`. Send `Accept: application/json` for a single body (whole-request deadline applies).
+- New options: `pageOutput`, `languageHint` (`"ar"`), `requestId`, and `vlmEndpoint: {url, headers?}` — the runner then POSTs each page image (`{image, mime, pageNumber, script, language, reason, documentName, requestId}`) to the AMS instead of calling a provider (`vlm` per-request settings still work).
+- Response adds `pages` (`[{page, text, method, engine?, reason?, script?, flags?}]`), `encoding` (csv/text/rtf), `format`.
+- **`POST /ocr`** `{data: base64 PNG, script?: "latin"|"arabic", pageNumber?, totalPages?, documentName?, requestId?}` → `{text, confidence, script, total_boxes, dropped_boxes}` — the browser → runner fallback (the AMS forwards the browser's page and adds `X-API-Key`).
+- RapidOCR loads **English PP-OCRv4 + Arabic PP-OCRv5** recognition (same detector); mixed EN/AR scans re-read weak boxes with the Arabic model.
+- New formats (pptx/odt/ods/odp/rtf/doc/xls/ppt) are read in pure JS; LibreOffice is a lazy fallback only.
+
 ### `POST /transcribe`
 
 Speech-to-text with a **local-first escalation walk** (Track 3):
@@ -241,8 +250,16 @@ as a packed tarball, not a symlink, so the runtime tree is self-contained.
 | `RAPIDOCR_MODEL_PATH` | `./models/rapidocr` | where the ONNX models live |
 | `MOONSHINE_MODEL_PATH` | `./models/moonshine` | Moonshine artifacts (set explicitly in the image) |
 | `RUNNER_MAX_CONCURRENCY` | `2` | in-flight requests, `/parse` + `/transcribe` shared; excess → 503 |
-| `RUNNER_MAX_TOTAL_MS` | `110000` | whole-request deadline, `/parse` |
-| `RUNNER_MAX_BYTES` | `20971520` | decoded document cap (20 MB) |
+| `RUNNER_MAX_TOTAL_MS` | `110000` | whole-request deadline, `/parse` in `json` mode |
+| `RUNNER_MAX_PAGE_MS` | `120000` | per-page budget in `stream` mode (reset on every page) and for `/ocr` |
+| `RUNNER_MAX_BYTES` | `104857600` | decoded document cap (100 MB) |
+| `RUNNER_MAX_OCR_PAGES` | `300` | ceiling + default for `options.maxPages` (OCR/vision pages only) |
+| `RUNNER_MAX_CHARS` | `2000000` | ceiling + default for `options.maxChars` |
+| `RUNNER_RESPONSE_MODE` | `stream` | `stream` (NDJSON, one page per line) or `json`; per request via `Accept: application/x-ndjson` / `application/json` |
+| `RUNNER_PAGE_OUTPUT` | `per-page` | `per-page` or `single`; per request via `options.pageOutput` |
+| `LIBREOFFICE_MODE` | `lazy` | `off` · `lazy` (download on first need) · `preinstalled` (`LIBREOFFICE_BIN` or `soffice` on PATH) |
+| `LIBREOFFICE_ARCHIVE_URL` / `LIBREOFFICE_ARCHIVE_SHA256` | — | lazy mode: pinned archive (~95 MB, ~300 MB unpacked, with an Arabic font set) in the project bucket; without both, the fallback is disabled |
+| `LIBREOFFICE_CACHE_DIR` | `/data/libreoffice` | persistent disk for the unpacked LibreOffice (else it re-downloads after a restart) |
 | `RUNNER_STT_MAX_TOTAL_MS` | `60000` | whole-request deadline, `/transcribe` |
 | `RUNNER_STT_MAX_BYTES` | `26214400` | decoded audio cap (25 MB) |
 

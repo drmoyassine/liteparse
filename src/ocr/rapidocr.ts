@@ -24,7 +24,7 @@ export interface OcrRunner {
   recognize(
     image: Uint8Array,
     ctx: { signal?: AbortSignal },
-  ): Promise<{ text: string; confidence?: number }>;
+  ): Promise<{ text: string; confidence?: number; totalBoxes?: number; droppedBoxes?: number; weakBoxes?: number; script?: string }>;
   /** Optional: release model sessions / WASM resources. */
   dispose?(): void;
 }
@@ -39,7 +39,7 @@ export function createRapidOcrEngine(opts: RapidOcrOptions): OcrEngine {
     available: true,
     async recognize(image: Uint8Array, ctx: OcrContext): Promise<OcrResult> {
       const out = await opts.runner.recognize(image, { signal: ctx.signal });
-      return { text: (out.text ?? "").trim(), confidence: out.confidence };
+      return { ...out, text: (out.text ?? "").trim() };
     },
   };
 }

@@ -20,7 +20,9 @@ import type {
   ProgressEvent,
   WorkerOutbound,
 } from "./protocol.js";
-import { isError, isProgress, isResult } from "./protocol.js";
+import { isError, isPage, isProgress, isResult } from "./protocol.js";
+import type { ParseRequestOptions } from "./protocol.js";
+import type { Page } from "../types.js";
 import type { DocumentProfile, ExtractionEngine, RouteDecision } from "../router/types.js";
 import type { ParsedDocument } from "../types.js";
 
@@ -52,10 +54,14 @@ export interface ParseInput {
   filename?: string;
   profile: DocumentProfile;
   route: RouteDecision;
+  /** Limits / per-call options (worker defaults: 300 OCR pages, 2,000,000 chars). */
+  options?: ParseRequestOptions;
 }
 
 export interface ParseHandlers {
   onProgress?: (e: ProgressEvent) => void;
+  /** Each finished page, as soon as the worker reads it. Also re-arms the job timeout. */
+  onPage?: (page: Page) => void;
   /** Abort this parse. Posts a cancel + rejects the promise with an AbortError. */
   signal?: AbortSignal;
 }
@@ -80,6 +86,9 @@ interface PendingJob {
   resolve: (r: ParseResult) => void;
   reject: (e: Error) => void;
   onProgress?: (e: ProgressEvent) => void;
+  onPage?: (page: Page) => void;
+  /** Re-arm the (idle) timeout — called on every page so long documents don't time out. */
+  rearm?: () => void;
   timeoutId: ReturnType<typeof setTimeout> | null;
   /** Abort signal for this job, if any (detached on settle). */
   signal?: AbortSignal;
@@ -128,6 +137,12 @@ export function createWorkerOcrClient(opts: WorkerOcrClientOptions): WorkerOcrCl
 
     if (isProgress(msg)) {
       pending.get(msg.id)?.onProgress?.(msg);
+      return;
+    }
+    if (isPage(msg)) {
+      const job = pending.get(msg.id);
+      job?.rearm?.();
+      job?.onPage?.(msg.page);
       return;
     }
     if (isResult(msg)) {
@@ -200,19 +215,23 @@ export function createWorkerOcrClient(opts: WorkerOcrClientOptions): WorkerOcrCl
         return;
       }
 
+      const onTimeout = () => {
+        if (!pending.has(id)) return;
+        postCancel(id);
+        finish(id);
+        reject(new Error(`parse timed out after ${timeoutMs}ms without a new page`));
+      };
       const job: PendingJob = {
         resolve,
         reject,
         onProgress: handlers.onProgress,
-        timeoutId:
-          timeoutMs > 0
-            ? setTimeout(() => {
-                if (!pending.has(id)) return;
-                postCancel(id);
-                finish(id);
-                reject(new Error(`parse timed out after ${timeoutMs}ms`));
-              }, timeoutMs)
-            : null,
+        onPage: handlers.onPage,
+        timeoutId: timeoutMs > 0 ? setTimeout(onTimeout, timeoutMs) : null,
+        rearm: () => {
+          if (job.timeoutId === null) return;
+          clearTimeout(job.timeoutId);
+          job.timeoutId = setTimeout(onTimeout, timeoutMs);
+        },
       };
       pending.set(id, job);
 
@@ -243,6 +262,7 @@ export function createWorkerOcrClient(opts: WorkerOcrClientOptions): WorkerOcrCl
         filename: input.filename,
         profile: input.profile,
         route: input.route,
+        ...(input.options ? { options: input.options } : {}),
       };
       // Transfer the underlying buffer (zero-copy when not a subarray).
       console.log("[worker-client] postMessage parse", {

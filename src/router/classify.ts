@@ -18,6 +18,7 @@ import type { DocumentProfile, Script } from "./types.js";
 import { sniff } from "../sniff.js";
 import { extractPageText, loadPdf, nonWhitespaceLength } from "../pdf.js";
 import { detectScript } from "./languages.js";
+import { decodeWithDetection } from "../text/encoding.js";
 
 /** Options for {@link classifyDocument}. */
 export interface ClassifyOptions {
@@ -48,10 +49,9 @@ function isAbortError(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }
 
-/** Decode up to 8KB of the input as utf-8, for script detection on text/csv. */
+/** Decode up to 8KB of the input (encoding detected), for script detection on text/csv. */
 function decodeUtf8Sample(bytes: Uint8Array): string {
-  const end = Math.min(bytes.length, TEXT_SAMPLE_BYTES);
-  return new TextDecoder("utf-8", { fatal: false }).decode(bytes.subarray(0, end));
+  return decodeWithDetection(bytes.subarray(0, TEXT_SAMPLE_BYTES)).text;
 }
 
 /**

@@ -185,6 +185,18 @@ export function routeDocument(
         { engine: "text", location: inBrowser ? "browser" : "edge", reason: "plain text" },
       ];
       break;
+    case "pptx":
+    case "odt":
+    case "ods":
+    case "odp":
+    case "rtf":
+    case "doc":
+    case "xls":
+    case "ppt":
+      strategies = [
+        { engine: "office", location: inBrowser ? "browser" : "edge", reason: `${profile.kind} via pure-JS reader` },
+      ];
+      break;
 
     // ── Audio: local STT first (Moonshine), external gateway as ceiling/fallback. ──
     case "audio": {

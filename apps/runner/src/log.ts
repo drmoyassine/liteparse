@@ -13,7 +13,7 @@ export function newRequestId(): string {
 /** Deep-copy `value` with every `apiKey` string property masked. */
 export function redactVlm<T>(value: T): T {
   return JSON.parse(
-    JSON.stringify(value, (k, v) => (k === "apiKey" && typeof v === "string" ? "***" : v)),
+    JSON.stringify(value, (k, v) => ((k === "apiKey" && typeof v === "string") || (k === "headers" && v && typeof v === "object") ? "***" : v)),
   ) as T;
 }
 

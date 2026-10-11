@@ -224,4 +224,34 @@ export type { ModelDescriptor, ModelOrigin } from "./worker/model-origin.js";
 
 // Keep in sync with package.json (not read from it — same trade-off as the
 // runner's VERSION in apps/runner/src/index.ts).
-export const VERSION = "0.5.0";
+export const VERSION = "0.6.0";
+
+// 0.6.0 — per-page cascade helpers, new formats, encoding / quality checks, remote steps.
+export { createRunnerOcrEngine, createVisionEndpointGateway, bytesToBase64 } from "./ocr/remote.js";
+export type {
+  RunnerOcrClientOptions,
+  RunnerOcrRequest,
+  RunnerOcrResponse,
+  VisionEndpointOptions,
+} from "./ocr/remote.js";
+export { scoreTextLayer } from "./text/quality.js";
+export type { TextQuality } from "./text/quality.js";
+export { detectEncoding, decodeWithDetection } from "./text/encoding.js";
+export type { DetectedEncoding } from "./text/encoding.js";
+export { rebuildPageText } from "./pdf.js";
+export { extractOffice, OFFICE_KINDS } from "./formats/index.js";
+export type { OfficeExtraction } from "./formats/index.js";
+export { imageFormat, decodeTiff } from "./image/convert.js";
+export type { ImageFormat, DecodedFrame } from "./image/convert.js";
+export { WORKER_DEFAULTS, defaultExtractors } from "./worker/ocr-worker.js";
+export { isPage } from "./worker/protocol.js";
+export type { PageEvent, ParseRequestOptions } from "./worker/protocol.js";
+export type { ExtractedPages } from "./worker/execute.js";
+export type {
+  PageReason,
+  DocumentSource,
+  ParsedMeta,
+  DictionaryCheck,
+  DictionaryReport,
+  PdfTextItemLike,
+} from "./types.js";

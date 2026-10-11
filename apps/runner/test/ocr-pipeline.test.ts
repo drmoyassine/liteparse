@@ -50,7 +50,7 @@ describe.skipIf(!existsSync(MODELS))("OCR pipeline (real models)", { timeout: 12
     const data = readFileSync(FIXTURE).toString("base64");
     const res = await app.request("/parse", {
       method: "POST",
-      headers: { "x-api-key": "k-test", "content-type": "application/json" },
+      headers: { "x-api-key": "k-test", "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ data, filename: "scanned-text.pdf" }),
     });
     expect(res.status).toBe(200);

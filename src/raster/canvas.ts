@@ -1,4 +1,5 @@
 import type { PdfDocumentLike, PreprocessOptions, RasterAdapter } from "../types.js";
+import { decodeTiff } from "../image/convert.js";
 
 /**
  * Browser raster adapter — renders a PDF page to a PNG using the Canvas API
@@ -131,5 +132,30 @@ export const canvasRaster: RasterAdapter = {
     }
 
     return canvasToPng(canvas);
+  },
+
+  /** TIFF (pure-JS decoder, one PNG per frame) / BMP / GIF / WebP (createImageBitmap) → PNG. */
+  async imageToPng(bytes: Uint8Array, format: string): Promise<Uint8Array[]> {
+    if (format === "tiff") {
+      const frames = await decodeTiff(bytes);
+      const out: Uint8Array[] = [];
+      for (const f of frames) {
+        const { canvas, ctx } = makeCanvas(f.width, f.height);
+        const img = ctx.createImageData(f.width, f.height);
+        img.data.set(f.data);
+        ctx.putImageData(img, 0, 0);
+        out.push(await canvasToPng(canvas));
+      }
+      return out;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = globalThis as any;
+    const bitmap = await g.createImageBitmap(new Blob([bytes as BlobPart], { type: `image/${format}` }));
+    const { canvas, ctx } = makeCanvas(bitmap.width, bitmap.height);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, bitmap.width, bitmap.height);
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close?.();
+    return [await canvasToPng(canvas)];
   },
 };

@@ -13,11 +13,36 @@ export interface RequestedVlmOptions {
   temperature?: number;
 }
 
+/** AMS vision endpoint: the runner POSTs each page image here instead of calling a provider. */
+export interface RequestedVisionEndpoint {
+  url: string;
+  headers?: Record<string, string>;
+}
+
 export interface RequestedParseOptions {
   vlm?: RequestedVlmOptions;
+  /** Alternative to `vlm`: defer vision to the AMS (its settings, logs, data rules). */
+  vlmEndpoint?: RequestedVisionEndpoint;
   maxPages?: number;
   perPageTimeoutMs?: number;
   maxChars?: number;
+  /** "per-page" (default from RUNNER_PAGE_OUTPUT) or "single" (pre-0.6 shape). */
+  pageOutput?: "per-page" | "single";
+  /** ISO 639-1 hint (e.g. "ar") — picks the OCR model for scanned pages. */
+  languageHint?: string;
+  /** The AMS's own request id, passed to the vision step untouched. */
+  requestId?: string;
+}
+
+/** One page on the wire. */
+export interface PageJson {
+  page: number;
+  text: string;
+  method: string;
+  engine?: string;
+  reason?: string;
+  script?: string;
+  flags?: string[];
 }
 
 /** POST /parse body. */
@@ -35,6 +60,19 @@ export interface ParseResponseJson {
   page_count: number;
   warnings: string[];
   duration_ms: number;
+  pages: PageJson[];
+  encoding?: string;
+  format?: string;
+}
+
+/** POST /ocr body — one page image (browser → runner fallback). */
+export interface OcrRequestBody {
+  data: string;
+  script?: string;
+  pageNumber?: number;
+  totalPages?: number;
+  documentName?: string;
+  requestId?: string;
 }
 
 /** Error body for every non-200. */

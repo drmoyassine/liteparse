@@ -2,9 +2,9 @@
 
 Isomorphic document text extraction — one entry point, runs unchanged in the **browser**, **Node**, and **Deno/edge**.
 
-Extracts text from PDFs (native + OCR + VLM fallback), Office files (`.docx`/`.xlsx`/`.csv`), and images, behind a single `parseDocument()` call. Platform-specific work (image rasterising, OCR, vision-LLM fallback) is done through **swappable adapters** that are auto-detected per runtime, so the same code parses a digital PDF in Node and a scanned passport in the browser.
+Extracts text from PDFs (per-page native text + OCR + VLM fallback), Office files (`.docx`/`.xlsx`/`.pptx`, OpenDocument `.odt`/`.ods`/`.odp`, `.rtf`, legacy `.doc`/`.xls`/`.ppt`), `.csv`/text (encoding-detected), and images (PNG/JPEG/TIFF/BMP/GIF/WebP), behind a single `parseDocument()` call. Platform-specific work (image rasterising, OCR, vision-LLM fallback) is done through **swappable adapters** that are auto-detected per runtime, so the same code parses a digital PDF in Node and a scanned passport in the browser.
 
-> **Status:** `0.5.0` removes the Arabic batch model (`moonshine-batch-tiny-ar`) from the model set — never loaded by any automatic path since AR went streaming everywhere, license "other" where every remaining id is MIT, and 31 MB of dead weight in the runner image; explicit `model:` ids for it now fall back to the streaming default; `0.4.4` flips the BROWSER Arabic default to streaming too — the official artifacts now load from a byte-identical Hugging Face mirror (the official CDN blocks browser fetches), and single-threaded WASM decodes them at RTF ≈ 0.19, same as native; `0.4.3` swaps the runner's Arabic slot-1 STT model to the official Moonshine streaming artifacts — 27 s clips decode cleanly (RTF ≈ 0.2) where every HF-checkpoint export looped past ~2 s; `0.4.2` fixes a dictation listener leak (a shared worker delivered each session's text to every past client); `0.4.1` fixes the batch-decoder cross-KV threading (Arabic hallucination loops, base-en deaf decode); `0.4.0` ships the linear OCR cascade (pdfjs native text → RapidOCR → VLM fallback) plus the full speech track — audio as a first-class `parseDocument()` kind, local Moonshine STT (EN/AR, browser + self-hosted runner), and live dictation. See [ARCHITECTURE.md](./ARCHITECTURE.md) and [ROADMAP.md](./ROADMAP.md).
+> **Status:** `0.6.0` processes every PDF **page by page** through the existing cascade (pdfjs text → RapidOCR → Granite-Docling → vision), restores line breaks / word spaces / paragraphs / hyphenated words in native text, checks each page's text layer for corruption (re-reading or flagging suspect pages), adds the Arabic PP-OCRv5 model to the runner's RapidOCR, a browser → runner OCR fallback, PowerPoint / OpenDocument / RTF / legacy Office readers (LibreOffice only as a runner fallback), CSV/text encoding detection, TIFF/BMP/GIF/WebP conversion, and page-by-page delivery. **Breaking:** `pages` is now one entry per real page — pass `pageOutput: "single"` for the old shape. See [CHANGELOG.md](./CHANGELOG.md). `0.5.0` removes the Arabic batch model (`moonshine-batch-tiny-ar`) from the model set — never loaded by any automatic path since AR went streaming everywhere, license "other" where every remaining id is MIT, and 31 MB of dead weight in the runner image; explicit `model:` ids for it now fall back to the streaming default; `0.4.4` flips the BROWSER Arabic default to streaming too — the official artifacts now load from a byte-identical Hugging Face mirror (the official CDN blocks browser fetches), and single-threaded WASM decodes them at RTF ≈ 0.19, same as native; `0.4.3` swaps the runner's Arabic slot-1 STT model to the official Moonshine streaming artifacts — 27 s clips decode cleanly (RTF ≈ 0.2) where every HF-checkpoint export looped past ~2 s; `0.4.2` fixes a dictation listener leak (a shared worker delivered each session's text to every past client); `0.4.1` fixes the batch-decoder cross-KV threading (Arabic hallucination loops, base-en deaf decode); `0.4.0` ships the linear OCR cascade (pdfjs native text → RapidOCR → VLM fallback) plus the full speech track — audio as a first-class `parseDocument()` kind, local Moonshine STT (EN/AR, browser + self-hosted runner), and live dictation. See [ARCHITECTURE.md](./ARCHITECTURE.md) and [ROADMAP.md](./ROADMAP.md).
 
 ## Install
 
@@ -194,9 +194,30 @@ Today every document runs the same fixed cascade. The router **classifies once**
 
 ➡️ Full design: [ARCHITECTURE.md](./ARCHITECTURE.md) · Build plan (parallelized for multi-agent execution): [ROADMAP.md](./ROADMAP.md)
 
+## Per-page output (0.6.0)
+
+```ts
+const doc = await parseDocument(file, {
+  vlm,                          // AMS-supplied vision step (receives page/script/reason/documentName/requestId)
+  languageHint: "ar",           // optional: script for scanned pages
+  requestId: "ams-123",         // passed to the vision step untouched
+  runnerOcr: createRunnerOcrEngine({ url: "/api/runner-ocr" }), // browser → runner (AMS proxy adds the key)
+  onPage: (p) => render(p),     // page-by-page delivery
+  pageOutput: "per-page",       // or "single" (pre-0.6 shape; same top-level text)
+});
+doc.pages[9]; // { pageNumber: 10, method: "ocr", engine: "rapidocr-server", reason: "scanned", script: "latin", flags: [] }
+```
+
+- Each PDF page: native text → quality check → (only if missing/suspect) render that page → RapidOCR (English or Arabic model) → Granite-Docling → vision. A digital PDF with 3 scanned pages OCRs 3 pages; `source` is `mixed` when pages differ.
+- Corrupted text layers (`\uFFFD`, private-use / control glyphs, symbols or digits inside words, mojibake) are re-read and the better-scoring version kept; with no OCR/vision the page keeps its text and is flagged `text_layer_suspect:page_<n>`. Optional letter-swap check: `import { createDictionaryCheck } from "@drmoyassine/liteparse/dictionary"` → `parseDocument(f, { dictionary: createDictionaryCheck({ escalate: false }) })` (flags only).
+- Arabic on scans: pages are assigned a script from `languageHint`, the document's native pages, or the RapidOCR box filter (≥30% of boxes dropped/weak ⇒ unreadable script). The runner re-reads those boxes with the Arabic model (flag `ocr_mixed_script` / `ocr_dropped_script`); the browser sends them to `runnerOcr`, then vision.
+- Pages never silently disappear: unread pages carry `page_unread:page_<n>`, budget-skipped pages `ocr_skipped_budget:page_<n>`.
+- Office readers are pure JS everywhere; files they can't read (PowerPoint 95, encrypted, picture-only) become `needs_runner_conversion:<kind>` in the browser/edge, and are converted to PDF by LibreOffice on the runner (`convertToPdf`).
+- Worker: `client.parse({ ..., options: { maxPages, maxChars, pageOutput, languageHint, requestId } }, { onPage })` — a `{type:"page"}` message per page; the job timeout is an idle timeout re-armed by every page. `configureWorker({ runnerOcr, dictionary })`.
+
 ## Limits
 
-20 MB input · 20 OCR pages · 50k output chars · 30 s per-page abort. VLM fallback is called at most `maxPages` times and reports `warnings: ["vlm_fallback_used:<n> pages"]`.
+Library defaults (direct callers): 20 MB input · 20 OCR/vision pages (native pages are not counted) · 50k output chars · 30 s per page. Worker defaults: 300 OCR pages · 2,000,000 chars · 60 s per page. Runner defaults: 100 MB · 300 OCR pages · 2,000,000 chars, streamed page by page. Every limit hit produces a warning (`truncated_pages:…`, `truncated_chars:…`).
 
 ## License
 

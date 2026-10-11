@@ -29,6 +29,7 @@ WORKDIR /models
 # Committed text sidecars (dict + tokenizer/streaming-config JSONs) ride the
 # build context; only the binaries are downloaded + hash-verified.
 COPY apps/runner/models/ppocr-en-dict.txt /models/rapidocr/ppocr-en-dict.txt
+COPY apps/runner/models/ppocrv5-arabic-dict.txt /models/rapidocr/ppocrv5-arabic-dict.txt
 COPY apps/runner/models/moonshine /models/moonshine
 RUN <<'EOF'
 set -eux
@@ -45,6 +46,10 @@ const ARTIFACTS = [
   ["rapidocr", "en_PP-OCRv4_rec_infer.onnx",
    "5ca59a096cf493d5fd5044b9ccc1bdea9229fbcf656bd76040ff80a00201ee16",
    "https://huggingface.co/breezedeus/cnocr-ppocr-en_PP-OCRv4/resolve/main/en_PP-OCRv4_rec_infer.onnx"],
+  // Rec: official RapidAI Arabic PP-OCRv5 mobile (RapidOCR v3.9.2 model set; ~8 MB)
+  ["rapidocr", "arabic_PP-OCRv5_rec_mobile.onnx",
+   "c1192e632d0baa9146ae5b756a0e635e3dc63c1733737ebfd1629e87144e9295",
+   "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv5/rec/arabic_PP-OCRv5_rec_mobile.onnx"],
   // ── Moonshine streaming tiny EN (slot 1) — moonshine-ai, MIT ──
   ["moonshine/streaming-tiny-en", "frontend.ort",
    "2257542ce88f8ce00dfce8431e654045ba8e8e64d40bb941b0bdb92a0aaf31ec",
@@ -149,6 +154,10 @@ WORKDIR /app
 # pays session LOAD, not download.
 ENV NODE_ENV=production \
     PORT=3000 \
+    RUNNER_RESPONSE_MODE=stream \
+    RUNNER_PAGE_OUTPUT=per-page \
+    LIBREOFFICE_MODE=lazy \
+    LIBREOFFICE_CACHE_DIR=/data/libreoffice \
     RAPIDOCR_MODEL_PATH=/app/models/rapidocr \
     MOONSHINE_MODEL_PATH=/app/models/moonshine
 # Only the runner's own tree: dist + node_modules (natives + tarball-installed
@@ -158,6 +167,10 @@ COPY --from=build /repo/apps/runner/node_modules ./node_modules
 COPY --from=build /repo/apps/runner/package.json ./package.json
 COPY --from=models /models/rapidocr ./models/rapidocr
 COPY --from=models /models/moonshine ./models/moonshine
+# LibreOffice (lazy fallback) is NOT baked in: it is downloaded on first need from
+# LIBREOFFICE_ARCHIVE_URL (pinned by LIBREOFFICE_ARCHIVE_SHA256) into /data —
+# mount a persistent volume there so the ~300 MB unpack survives restarts.
+VOLUME ["/data"]
 EXPOSE 3000
 # node:22-slim has no curl/wget — probe with node itself.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

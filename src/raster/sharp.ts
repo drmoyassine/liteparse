@@ -74,5 +74,23 @@ export async function createSharpRaster(): Promise<RasterAdapter> {
       const out: Uint8Array = await pipeline.png().toBuffer();
       return new Uint8Array(out);
     },
+
+    /** TIFF (one PNG per frame) / GIF / WebP via sharp; BMP via @napi-rs/canvas (libvips has no BMP loader). */
+    async imageToPng(bytes: Uint8Array, format: string): Promise<Uint8Array[]> {
+      if (format === "bmp") {
+        const loadImage = canvasMod.loadImage ?? canvasMod.default?.loadImage;
+        const img = await loadImage(Buffer.from(bytes));
+        const canvas = createCanvas(img.width, img.height);
+        canvas.getContext("2d").drawImage(img, 0, 0);
+        return [new Uint8Array(canvas.toBuffer("image/png"))];
+      }
+      const meta = await sharp(bytes).metadata();
+      const frames = format === "tiff" ? Math.max(1, meta.pages ?? 1) : 1;
+      const out: Uint8Array[] = [];
+      for (let i = 0; i < frames; i++) {
+        out.push(new Uint8Array(await sharp(bytes, { page: i }).flatten({ background: "#ffffff" }).png().toBuffer()));
+      }
+      return out;
+    },
   };
 }

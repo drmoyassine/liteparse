@@ -55,18 +55,22 @@ describe("sniff magic bytes", () => {
     expect(res.warnings.some((w) => w.startsWith("ooxml_kind_ambiguous"))).toBe(true);
   });
 
-  it("flags legacy OLE2 (.doc/.xls) as other with a warning", () => {
+  it("sub-types an unreadable OLE2 header by extension (0.6: legacy Office is supported)", () => {
     const ole = padded([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
-    const res = sniff({ bytes: ole, filename: "old.doc" });
+    expect(sniff({ bytes: ole, filename: "old.doc" }).kind).toBe("doc");
+    expect(sniff({ bytes: ole, filename: "old.ppt" }).kind).toBe("ppt");
+    const res = sniff({ bytes: ole });
     expect(res.kind).toBe("other");
-    expect(res.warnings.some((w) => w.startsWith("legacy_office_not_supported"))).toBe(true);
+    expect(res.warnings.some((w) => w.startsWith("ole_kind_unknown"))).toBe(true);
   });
 
   it("uses extension when no magic is present", () => {
     expect(sniff({ filename: "data.csv" }).kind).toBe("csv");
     expect(sniff({ filename: "readme.md" }).kind).toBe("text");
     expect(sniff({ filename: "photo.PNG" }).kind).toBe("image");
-    expect(sniff({ filename: "mystery.doc" }).kind).toBe("other");
+    expect(sniff({ filename: "mystery.doc" }).kind).toBe("doc");
+    expect(sniff({ filename: "deck.pptx" }).kind).toBe("pptx");
+    expect(sniff({ filename: "notes.rtf" }).kind).toBe("rtf");
   });
 
   it("uses mime when neither magic nor extension resolve", () => {

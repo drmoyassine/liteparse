@@ -26,6 +26,7 @@ export default defineConfig({
     "stt/server": "src/stt/gateway.server.ts",
     "stt/moonshine-server": "src/stt/moonshine-server.ts",
     "engines/rapidocr": "src/engines/rapidocr/index.ts",
+    dictionary: "src/text/dictionary.ts",
     "engines/moonshine": "src/engines/moonshine/index.ts",
     // Track 3 Phase D (dictation): the worklet entry is STANDALONE (zero
     // imports — AudioWorklet module), the worker entry self-installs inside a
@@ -38,7 +39,7 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   clean: true,
-  external: ["pdfjs-dist", "sharp", "@napi-rs/canvas", "onnxruntime-web", "onnxruntime-node", "dommatrix"],
+  external: ["jszip", "pdfjs-dist", "sharp", "@napi-rs/canvas", "onnxruntime-web", "onnxruntime-node", "dommatrix"],
   // Keep the ESM dynamic-import graph intact (adapters load on demand).
   splitting: false,
 });

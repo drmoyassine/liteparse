@@ -19,6 +19,7 @@ describe("createVlmOcrEngine", () => {
       hint: "passport",
       signal: undefined,
       mime: "image/png",
+      pageNumber: 3, // 0.6: real 1-based page number for the AMS
     });
   });
 

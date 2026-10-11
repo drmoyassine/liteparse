@@ -1,4 +1,4 @@
-import type { PdfDocumentLike, PdfLibrary, PdfPageLike } from "./types.js";
+import type { PdfDocumentLike, PdfLibrary, PdfPageLike, PdfTextItemLike } from "./types.js";
 
 /**
  * PDF handling via pdfjs-dist (optional peer). The library is loaded lazily so a
@@ -181,14 +181,66 @@ export async function loadPdf(
   }
 }
 
-/** Join the text items of a page into a single, whitespace-normalised string. */
+/** Extract a page's text with line breaks, word spaces and paragraph gaps restored. */
 export async function extractPageText(page: PdfPageLike): Promise<string> {
   const content = await page.getTextContent();
-  let raw = "";
-  for (const item of content.items) {
-    if (typeof item.str === "string") raw += item.str;
+  return rebuildPageText(content.items);
+}
+
+/**
+ * Rebuild readable text from pdfjs text items. pdfjs items carry `hasEOL` and a
+ * `transform` ([a,b,c,d,x,y]); we use both to put back line breaks (y jump / EOL),
+ * blank lines between paragraphs (gap ≥ ~1.8 line heights), and spaces between words
+ * (horizontal gap). Items keep content-stream order, so RTL (Arabic) lines stay in
+ * logical order. Words hyphenated across a line end are re-joined.
+ */
+export function rebuildPageText(items: ReadonlyArray<PdfTextItemLike>): string {
+  let out = "";
+  let prev: { x: number; y: number; endX: number; h: number; rtl: boolean } | null = null;
+  let pendingEol = false;
+
+  for (const item of items) {
+    if (typeof item.str !== "string") continue;
+    const str = item.str;
+    const t = item.transform;
+    if (!t || t.length < 6) {
+      // Positionless item (fakes / exotic builds): concatenate, honour EOL only.
+      out += str + (item.hasEOL ? "\n" : "");
+      continue;
+    }
+    if (str === "" && !item.hasEOL) continue;
+    const x = t[4]!;
+    const y = t[5]!;
+    const h = Math.abs(item.height || t[3] || 10) || 10;
+    const w = item.width ?? 0;
+    const rtl = item.dir === "rtl";
+
+    if (str !== "") {
+      if (prev) {
+        const lh = Math.max(h, prev.h);
+        const dy = Math.abs(y - prev.y);
+        if (pendingEol || dy > 0.5 * lh) {
+          out += dy > 1.8 * lh ? "\n\n" : "\n";
+        } else {
+          const gap = rtl ? prev.x - (x + w) : x - prev.endX;
+          if (gap > 0.15 * lh && !/\s$/.test(out) && !/^\s/.test(str)) out += " ";
+        }
+      }
+      out += str;
+      prev = { x, y, endX: x + w, h, rtl };
+      pendingEol = false;
+    }
+    if (item.hasEOL) pendingEol = true;
   }
-  return raw.replace(/\s+/g, " ").trim();
+
+  return out
+    .replace(/[ \t\u00A0]+/g, " ")
+    .split("\n")
+    .map((l) => l.trim())
+    .join("\n")
+    .replace(/(\p{L})[-\u00AD]\n(?=\p{Ll})/gu, "$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /** Count non-whitespace characters — the heuristic for "does this page have real text". */

@@ -15,16 +15,25 @@ export function createVlmOcrEngine(
     name: "vlm",
     available: true,
     async recognize(image: Uint8Array, ctx: OcrContext): Promise<OcrResult> {
-      const text = await vlm.readImage(image, {
+      const opts: Record<string, unknown> = {
         pageIndex: ctx.pageIndex,
         totalPages: ctx.totalPages,
         hint: ctx.hint,
         signal: ctx.signal,
+        pageNumber: ctx.pageIndex + 1,
+        script: ctx.script,
+        language: ctx.languageHint,
+        reason: ctx.reason,
+        documentName: ctx.documentName,
+        requestId: ctx.requestId,
         // Sniff the real MIME from magic bytes so a JPEG/WebP phone photo isn't
         // mislabelled image/png (which most providers reject/mis-decode). Falls
         // back to the caller's defaultMime for unknown magic. (P4 / R5.)
         mime: sniffImageMime(image, defaultMime),
-      });
+      };
+      // Context keys are sent only when known, so gateways see a clean object.
+      for (const k of ["script", "language", "reason", "documentName", "requestId"]) if (opts[k] === undefined) delete opts[k];
+      const text = await vlm.readImage(image, opts);
       return { text: (text ?? "").trim() };
     },
   };

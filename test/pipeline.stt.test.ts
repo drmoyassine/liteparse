@@ -39,7 +39,7 @@ describe("parseDocument — audio documents (external gateway)", () => {
     expect(doc.kind).toBe("audio");
     expect(doc.text).toBe("meeting notes here");
     expect(doc.source).toBe("stt");
-    expect(doc.pages).toEqual([{ index: 0, text: "meeting notes here", source: "stt" }]);
+    expect(doc.pages).toMatchObject([{ index: 0, text: "meeting notes here", source: "stt" }]);
     expect(doc.meta.sttPages).toBe(1);
     expect(doc.meta.pagesProcessed).toBe(1);
     expect(gw.transcribe).toHaveBeenCalledOnce();
