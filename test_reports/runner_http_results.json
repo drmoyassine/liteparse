@@ -1,0 +1,167 @@
+[
+  {
+    "name": "health ocr=ready",
+    "ok": true,
+    "info": "{\"ok\":true,\"version\":\"0.4.0\",\"uptime_s\":654,\"ocr\":\"ready\",\"stt\":\"unavailable\"}"
+  },
+  {
+    "name": "POST /parse (no Accept) returns NDJSON with {type:page}+ then {type:result}",
+    "ok": true,
+    "info": "ct=application/x-ndjson; charset=utf-8 pages=2 results=1"
+  },
+  {
+    "name": "POST /parse Accept:application/json includes pages[]",
+    "ok": true,
+    "info": "pages=2"
+  },
+  {
+    "name": "mixed-141: 141 pages",
+    "ok": true,
+    "info": "pages=141"
+  },
+  {
+    "name": "mixed-141: source=mixed",
+    "ok": true,
+    "info": "source=mixed"
+  },
+  {
+    "name": "mixed-141: only pages 10,70,140 use OCR with reason=scanned",
+    "ok": true,
+    "info": "ocrPages=[10,70,140]"
+  },
+  {
+    "name": "mixed-141: native pages contain line breaks",
+    "ok": true,
+    "info": ""
+  },
+  {
+    "name": "mixed-141: hyphenated 'accredi-/tation' rejoined -> 'accreditation'",
+    "ok": true,
+    "info": "ok"
+  },
+  {
+    "name": "corrupted-layer: page 2 reason=text_layer_suspect",
+    "ok": true,
+    "info": "reason=text_layer_suspect"
+  },
+  {
+    "name": "corrupted-layer: warning text_layer_replaced:page_2",
+    "ok": true,
+    "info": "[\"text_layer_replaced:page_2\"]"
+  },
+  {
+    "name": "mixed-en-ar-scan: contains Arabic 'تقرير الجودة السنوي'",
+    "ok": true,
+    "info": ""
+  },
+  {
+    "name": "mixed-en-ar-scan: warning ocr_mixed_script:page_1",
+    "ok": true,
+    "info": "[\"ocr_mixed_script:page_1\"]"
+  },
+  {
+    "name": "deck.pptx: 2 pages",
+    "ok": true,
+    "info": "pages=2"
+  },
+  {
+    "name": "deck.pptx: speaker notes on slide 1",
+    "ok": true,
+    "info": ""
+  },
+  {
+    "name": "deck.ppt: 2 pages",
+    "ok": true,
+    "info": "pages=2"
+  },
+  {
+    "name": "deck.ppt: speaker notes on slide 1",
+    "ok": true,
+    "info": ""
+  },
+  {
+    "name": "deck.odp: 2 pages",
+    "ok": true,
+    "info": "pages=2"
+  },
+  {
+    "name": "deck.odp: speaker notes on slide 1",
+    "ok": true,
+    "info": ""
+  },
+  {
+    "name": "doc.doc: has English+Arabic",
+    "ok": true,
+    "info": "len=139"
+  },
+  {
+    "name": "doc.odt: has English+Arabic",
+    "ok": true,
+    "info": "len=138"
+  },
+  {
+    "name": "doc.rtf: has English+Arabic",
+    "ok": true,
+    "info": "len=138"
+  },
+  {
+    "name": "sheet.xls: has rows",
+    "ok": true,
+    "info": "len=25"
+  },
+  {
+    "name": "sheet.ods: has rows",
+    "ok": true,
+    "info": "len=25"
+  },
+  {
+    "name": "ar1256.csv: Arabic text + encoding windows-1256",
+    "ok": true,
+    "info": "encoding hint: \"windows-1256\""
+  },
+  {
+    "name": "picture-only.pptx: Arabic text via libreoffice + OCR, warning converted_via_libreoffice:pptx:empty",
+    "ok": true,
+    "info": "[\"converted_via_libreoffice:pptx:empty\",\"ocr_mixed_script:page_1\"]"
+  },
+  {
+    "name": "two-frames.tif: 2 pages via OCR",
+    "ok": true,
+    "info": "pages=2"
+  },
+  {
+    "name": "frame.bmp: parsed via OCR",
+    "ok": true,
+    "info": "source=ocr"
+  },
+  {
+    "name": "frame.gif: parsed via OCR",
+    "ok": true,
+    "info": "source=ocr"
+  },
+  {
+    "name": "frame.webp: parsed via OCR",
+    "ok": true,
+    "info": "source=ocr"
+  },
+  {
+    "name": "/ocr without x-api-key -> 401",
+    "ok": true,
+    "info": "status=401"
+  },
+  {
+    "name": "/ocr arabic PNG: Arabic text + script=arabic",
+    "ok": true,
+    "info": "script=arabic len=49"
+  },
+  {
+    "name": "pageOutput:single returns 1 page",
+    "ok": true,
+    "info": "pages=1"
+  },
+  {
+    "name": "mixed-141 maxPages:1 warns truncated_pages/ocr_budget",
+    "ok": true,
+    "info": "[\"truncated_pages:ocr_budget_1\",\"ocr_skipped_budget:page_70\",\"page_unread:page_70\",\"ocr_skipped_budget:page_140\",\"page_unread:page_140\"]"
+  }
+]

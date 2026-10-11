@@ -1,0 +1,22 @@
+{
+  "summary": "Comprehensive backend testing of liteparse library + Hono runner service. Verified library tests (462/462), library tsc + build, runner tsc, runner vitest (72/75 passing — the 3 failing are the known pre-existing STT/Moonshine tests confirmed in the task description as unrelated). Started runner manually and executed 33 HTTP integration checks against /health, /parse (NDJSON streaming + JSON), /ocr endpoints covering mixed-141.pdf per-page cascade, corrupted text-layer replacement, mixed EN/AR scan, PPTX/PPT/ODP decks with speaker notes, DOC/ODT/RTF, XLS/ODS rows, windows-1256 CSV, LibreOffice fallback on picture-only PPTX, TIFF/BMP/GIF/WEBP OCR, Arabic PP-OCRv5 on /ocr, auth 401, pageOutput:single, maxPages:1 OCR-budget warning. All 33 checks pass.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/test_reports/runner_http_test.mjs",
+    "/app/test_reports/runner_http_results.json"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "None blocking. Code is clean: typed Hono handlers, env-based config, proper NDJSON streaming via content-type negotiation, per-page reasons/warnings surfaced consistently.",
+    "Note (not an issue): 3 STT tests in apps/runner/test/stt-pipeline.test.ts require Moonshine model files not present in this environment — matches the task description exactly."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100% (library 462/462, runner non-STT 72/72, HTTP integration 33/33)", "frontend": "N/A" },
+  "test_credentials": "PARSE_RUNNER_API_KEY=k (as per task)",
+  "seed_data_creation": "None — used existing fixtures under /app/test/fixtures/{v06,formats}",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Runner was started on port 3999 and killed at end. To rerun: cd /app/apps/runner && npm run build && PARSE_RUNNER_API_KEY=k PORT=3999 RAPIDOCR_MODEL_PATH=$PWD/models/rapidocr LIBREOFFICE_MODE=preinstalled node dist/index.js & then node /app/test_reports/runner_http_test.mjs. Expected 33/33 pass.",
+  "rca of the issue": "N/A — no issues found."
+}
