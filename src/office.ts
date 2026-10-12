@@ -1,6 +1,8 @@
 import mammoth from "mammoth";
 import * as XLSX from "xlsx";
 import { decodeWithDetection } from "./text/encoding.js";
+import { mdHeading, mdTable } from "./formats/markdown.js";
+import type { OfficeReadOptions } from "./formats/index.js";
 
 /**
  * Office + tabular text extraction (isomorphic: pure JS via mammoth + SheetJS).
@@ -16,8 +18,8 @@ import { decodeWithDetection } from "./text/encoding.js";
  * Other formats (pptx / ODF / rtf / doc / ppt / xls) live in ./formats/.
  */
 
-/** Extract plain text from a `.docx`. */
-export async function extractDocx(bytes: Uint8Array): Promise<string> {
+/** Extract plain text (or Markdown) from a `.docx`. */
+export async function extractDocx(bytes: Uint8Array, opts: OfficeReadOptions = {}): Promise<string> {
   // mammoth's two builds read DIFFERENT option keys in `openZip`:
   //   browser build → ONLY `arrayBuffer` (JSZip direct)
   //   Node build    → ONLY `path` | `buffer` | `file` (fed to JSZip.loadAsync,
@@ -29,10 +31,16 @@ export async function extractDocx(bytes: Uint8Array): Promise<string> {
   const isBrowser =
     typeof (globalThis as { window?: unknown }).window !== "undefined" &&
     typeof (globalThis as { document?: unknown }).document !== "undefined";
-  const result = isBrowser
-    ? await mammoth.extractRawText({ arrayBuffer: toArrayBuffer(bytes) })
+  const input = isBrowser
+    ? { arrayBuffer: toArrayBuffer(bytes) }
     : // Typed as Buffer (Node-build .d.ts) but JSZip.loadAsync accepts any typed array.
-      await mammoth.extractRawText({ buffer: bytes as unknown as Buffer });
+      { buffer: bytes as unknown as Buffer };
+  if (opts.structure === "markdown") {
+    const toMd = (mammoth as unknown as { convertToMarkdown(i: typeof input): Promise<{ value?: string }> }).convertToMarkdown;
+    const md = await toMd(input);
+    return (md.value ?? "").replace(/\n{3,}/g, "\n\n").trim();
+  }
+  const result = await mammoth.extractRawText(input);
   return result.value ?? "";
 }
 
@@ -48,20 +56,27 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   ) as ArrayBuffer;
 }
 
-/** Extract a single string from an `.xlsx`, concatenating all sheets as CSV. */
-export function extractXlsx(bytes: Uint8Array): string {
+/** Extract a single string from an `.xlsx`, concatenating all sheets as CSV (or Markdown tables). */
+export function extractXlsx(bytes: Uint8Array, opts: OfficeReadOptions = {}): string {
   const wb = XLSX.read(bytes, { type: "array" });
+  return renderWorkbook(wb, opts);
+}
+
+function renderWorkbook(wb: XLSX.WorkBook, opts: OfficeReadOptions): string {
+  const md = opts.structure === "markdown";
   const parts: string[] = [];
   for (const sheetName of wb.SheetNames) {
     const sheet = wb.Sheets[sheetName];
     if (!sheet) continue;
-    const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
-    if (wb.SheetNames.length > 1) {
-      parts.push(`# ${sheetName}`);
+    if (wb.SheetNames.length > 1 || md) parts.push(md ? mdHeading(2, sheetName) : `# ${sheetName}`);
+    if (md) {
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false, raw: false, defval: "" });
+      parts.push(mdTable(rows.map((r) => r.map((c) => String(c ?? "")))));
+    } else {
+      parts.push(XLSX.utils.sheet_to_csv(sheet, { blankrows: false }));
     }
-    parts.push(csv);
   }
-  return parts.join("\n").trim();
+  return parts.join(md ? "\n\n" : "\n").trim();
 }
 
 /** Decode text bytes with encoding detection (for `.csv` / plain text). */
@@ -70,10 +85,14 @@ export function decodeText(bytes: Uint8Array): string {
 }
 
 /** CSV: decode with the detected encoding BEFORE SheetJS sees it, then render rows. */
-export function extractCsv(bytes: Uint8Array): { text: string; encoding: string } {
+export function extractCsv(bytes: Uint8Array, opts: OfficeReadOptions = {}): { text: string; encoding: string } {
   const { text, encoding } = decodeWithDetection(bytes);
   const wb = XLSX.read(text, { type: "string", raw: true });
   const sheet = wb.Sheets[wb.SheetNames[0] ?? ""];
-  const csv = sheet ? XLSX.utils.sheet_to_csv(sheet, { blankrows: false }) : text;
-  return { text: csv.trim(), encoding };
+  if (!sheet) return { text: text.trim(), encoding };
+  if (opts.structure === "markdown") {
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false, raw: false, defval: "" });
+    return { text: mdTable(rows.map((r) => r.map((c) => String(c ?? "")))), encoding };
+  }
+  return { text: XLSX.utils.sheet_to_csv(sheet, { blankrows: false }).trim(), encoding };
 }

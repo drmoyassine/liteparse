@@ -182,9 +182,22 @@ export async function loadPdf(
 }
 
 /** Extract a page's text with line breaks, word spaces and paragraph gaps restored. */
-export async function extractPageText(page: PdfPageLike): Promise<string> {
+export async function extractPageText(page: PdfPageLike, opts: RebuildOptions = {}): Promise<string> {
   const content = await page.getTextContent();
-  return rebuildPageText(content.items);
+  return rebuildPageText(content.items, opts);
+}
+
+export interface RebuildOptions {
+  /** "markdown": lines set noticeably larger than the page's body text become `#` / `##` headings. */
+  structure?: "plain" | "markdown";
+}
+
+interface Line {
+  text: string;
+  /** Largest glyph height on the line. */
+  h: number;
+  /** Paragraph gap before this line. */
+  gap: boolean;
 }
 
 /**
@@ -194,10 +207,16 @@ export async function extractPageText(page: PdfPageLike): Promise<string> {
  * (horizontal gap). Items keep content-stream order, so RTL (Arabic) lines stay in
  * logical order. Words hyphenated across a line end are re-joined.
  */
-export function rebuildPageText(items: ReadonlyArray<PdfTextItemLike>): string {
-  let out = "";
+export function rebuildPageText(items: ReadonlyArray<PdfTextItemLike>, opts: RebuildOptions = {}): string {
+  const lines: Line[] = [];
+  let cur: Line | null = null;
   let prev: { x: number; y: number; endX: number; h: number; rtl: boolean } | null = null;
   let pendingEol = false;
+  const push = (gap: boolean): Line => {
+    cur = { text: "", h: 0, gap };
+    lines.push(cur);
+    return cur;
+  };
 
   for (const item of items) {
     if (typeof item.str !== "string") continue;
@@ -205,7 +224,9 @@ export function rebuildPageText(items: ReadonlyArray<PdfTextItemLike>): string {
     const t = item.transform;
     if (!t || t.length < 6) {
       // Positionless item (fakes / exotic builds): concatenate, honour EOL only.
-      out += str + (item.hasEOL ? "\n" : "");
+      const line = cur ?? push(false);
+      line.text += str;
+      if (item.hasEOL) push(false);
       continue;
     }
     if (str === "" && !item.hasEOL) continue;
@@ -216,23 +237,28 @@ export function rebuildPageText(items: ReadonlyArray<PdfTextItemLike>): string {
     const rtl = item.dir === "rtl";
 
     if (str !== "") {
+      let line = cur ?? push(false);
       if (prev) {
         const lh = Math.max(h, prev.h);
         const dy = Math.abs(y - prev.y);
         if (pendingEol || dy > 0.5 * lh) {
-          out += dy > 1.8 * lh ? "\n\n" : "\n";
+          line = push(dy > 1.8 * lh);
         } else {
           const gap = rtl ? prev.x - (x + w) : x - prev.endX;
-          if (gap > 0.15 * lh && !/\s$/.test(out) && !/^\s/.test(str)) out += " ";
+          if (gap > 0.15 * lh && !/\s$/.test(line.text) && !/^\s/.test(str)) line.text += " ";
         }
       }
-      out += str;
+      line.text += str;
+      line.h = Math.max(line.h, h);
       prev = { x, y, endX: x + w, h, rtl };
       pendingEol = false;
     }
     if (item.hasEOL) pendingEol = true;
   }
 
+  if (opts.structure === "markdown") markHeadings(lines);
+
+  const out = lines.map((l, i) => (i === 0 ? "" : l.gap ? "\n\n" : "\n") + l.text).join("");
   return out
     .replace(/[ \t\u00A0]+/g, " ")
     .split("\n")
@@ -241,6 +267,22 @@ export function rebuildPageText(items: ReadonlyArray<PdfTextItemLike>): string {
     .replace(/(\p{L})[-\u00AD]\n(?=\p{Ll})/gu, "$1")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/** Heading heuristic: short lines set ≥ 1.2× the body glyph height → `##`, ≥ 1.5× → `#`. */
+function markHeadings(lines: Line[]): void {
+  const sized = lines.filter((l) => l.text.trim() && l.h > 0);
+  if (sized.length < 4) return;
+  const heights: number[] = [];
+  for (const l of sized) for (let i = 0; i < l.text.trim().length; i++) heights.push(l.h);
+  heights.sort((a, b) => a - b);
+  const body = heights[Math.floor(heights.length / 2)]!;
+  for (const l of sized) {
+    const text = l.text.trim();
+    if (text.length > 100 || /[.;:,]$/.test(text) || l.h < 1.2 * body) continue;
+    l.text = `${l.h >= 1.5 * body ? "#" : "##"} ${text}`;
+    l.gap = true;
+  }
 }
 
 /** Count non-whitespace characters — the heuristic for "does this page have real text". */

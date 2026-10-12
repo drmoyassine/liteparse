@@ -16,17 +16,23 @@ export interface OfficeExtraction {
   warnings?: string[];
 }
 
+/** Options shared by the office readers. */
+export interface OfficeReadOptions {
+  /** "markdown": slide titles / headings → `#`, bullets → `-`, tables → GFM tables. Default plain text. */
+  structure?: "plain" | "markdown";
+}
+
 /** Kinds read by {@link extractOffice} (the router's `office` engine). */
 export const OFFICE_KINDS: ReadonlySet<DocKind> = new Set(["pptx", "odt", "odp", "rtf", "doc", "ppt", "ods", "xls"]);
 
 /** Read an office file directly in pure JS (browser, Node, edge alike). Throws when unreadable. */
-export async function extractOffice(kind: DocKind, bytes: Uint8Array): Promise<OfficeExtraction> {
+export async function extractOffice(kind: DocKind, bytes: Uint8Array, opts: OfficeReadOptions = {}): Promise<OfficeExtraction> {
   switch (kind) {
     case "pptx":
-      return extractPptx(bytes);
+      return extractPptx(bytes, opts);
     case "odt":
     case "odp":
-      return extractOdf(bytes, kind);
+      return extractOdf(bytes, kind, opts);
     case "rtf":
       return extractRtf(bytes);
     case "doc":
@@ -35,7 +41,7 @@ export async function extractOffice(kind: DocKind, bytes: Uint8Array): Promise<O
       return extractPpt(bytes);
     case "ods":
     case "xls":
-      return { pages: [extractXlsx(bytes)], format: kind };
+      return { pages: [extractXlsx(bytes, opts)], format: kind };
     default:
       throw new Error(`office: unsupported kind ${kind}`);
   }

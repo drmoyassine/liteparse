@@ -80,6 +80,7 @@ import { dbPostProcess, DEFAULT_DB_PARAMS, setDbPostProcessDebug, type DBParams 
 // reading-order sort, and the OCR quality gates (calibrated in ocr-lab).
 import { createCtcDecoder } from "./shared/ctc-decode.js";
 import { readingOrderSort } from "./shared/reading-order.js";
+import { reverseArabic, rtlRows } from "./shared/arabic.js";
 import {
   lengthWeightedConfidence,
   minBoxSide,
@@ -87,6 +88,7 @@ import {
   PER_BOX_CONFIDENCE_FLOOR,
   MIN_BOX_SIDE_PX,
   type TextBox,
+  UNREADABLE_SCRIPT_RATIO,
   WEAK_BOX_CONFIDENCE,
 } from "./shared/quality.js";
 
@@ -115,6 +117,19 @@ const MODEL_VERSION = "1.1.0"; // bumped from 1.0.0 → forces IndexedDB cache m
 // dict); bumping only this key forces resolveModel to re-fetch the small dict while the
 // large det (~10MB) + rec models — which are UNCHANGED — stay cached in IndexedDB.
 const DICT_VERSION = "1.2.0";
+// Arabic PP-OCRv5 recognition (optional, lazy). Same detection model; its own rec + dict.
+const AR_REC_MODEL_ID = "pp-ocrv5-rec-arabic";
+const AR_DICT_MODEL_ID = "pp-ocrv5-dict-arabic";
+const AR_MODEL_VERSION = "1.0.0";
+
+/** One recognition model: CTC session + decoder over its own dictionary. */
+interface RecModel {
+  session: InferenceSession;
+  decoder: ReturnType<typeof createCtcDecoder>;
+}
+
+/** When the Arabic rec model is fetched: never, on first Arabic/mixed page, or at init. */
+export type ArabicModelMode = "off" | "lazy" | "eager";
 
 // ── THREADING A/B KNOB (diagnostic) ──────────────────────────────────────────
 // 0 = auto (cores-1 when cross-origin-isolated, else 1). Set to 1 to force
@@ -153,18 +168,31 @@ export class RapidOcrRunner {
   docConfidence = 0;
   /** Box stats of the last page (feeds the cascade's unreadable-script signal). */
   lastStats = { totalBoxes: 0, droppedBoxes: 0, weakBoxes: 0 };
+  /** Script of the last recognize() ("latin" | "arabic" | "mixed"). */
+  lastScript = "latin";
+  /** Arabic rec model — loaded lazily by {@link loadArabic}; null until then / when off. */
+  private arabic: RecModel | null = null;
+  private arabicPromise: Promise<boolean> | null = null;
+  private arabicFailed = false;
+  readonly arabicMode: ArabicModelMode;
   /** True once init() has loaded both sessions + the dict (used by the adapter to label
    *  end-to-end timing cold vs warm). */
   get ready(): boolean {
     return !!(this.detSession && this.recSession && this.dictChars);
   }
+  /** True once the Arabic rec model is compiled (cached in IndexedDB after the first fetch). */
+  get arabicReady(): boolean {
+    return this.arabic !== null;
+  }
 
   constructor(opts?: {
     dbParams?: Partial<DBParams>,
     modelOrigin?: ModelOrigin,
+    arabic?: ArabicModelMode,
   }) {
     this.dbParams = { ...DEFAULT_DB_PARAMS, ...opts?.dbParams };
     this.modelOrigin = opts?.modelOrigin ?? null;
+    this.arabicMode = opts?.arabic ?? "lazy";
     // (ort env configuration moved to doInit — see the env block there. It must
     // be set before the FIRST InferenceSession.create, which ort reads exactly
     // once at initializeWebAssembly; construction-time vs init-time setup is
@@ -329,6 +357,42 @@ export class RapidOcrRunner {
       `[RapidOcrRunner] init: DONE. Det inputs: ${this.detSession!.inputNames}, ` +
       `Rec inputs: ${this.recSession!.inputNames}, Dict chars: ${this.dictChars.length}`
     );
+    if (this.arabicMode === "eager") void this.loadArabic();
+  }
+
+  /**
+   * Fetch + compile the Arabic PP-OCRv5 rec model (≈8 MB, once — IndexedDB keeps it) and its
+   * embedded dictionary. Resolves false (never throws) when the mode is "off" or the fetch
+   * failed, so the caller falls back to the runner / vision legs.
+   */
+  async loadArabic(): Promise<boolean> {
+    if (this.arabic) return true;
+    if (this.arabicMode === "off" || this.arabicFailed) return false;
+    if (this.arabicPromise) return this.arabicPromise;
+    this.arabicPromise = (async () => {
+      try {
+        if (!this.ort) await this.init();
+        const origin = this.modelOrigin ?? createThrowModelOrigin();
+        console.log("[RapidOcrRunner] arabic: resolving rec model + dict (download on first use)…");
+        const t0 = Date.now();
+        const [recBytes, dictBytes] = await Promise.all([
+          resolveModel({ id: AR_REC_MODEL_ID, version: AR_MODEL_VERSION }, origin),
+          resolveModel({ id: AR_DICT_MODEL_ID, version: AR_MODEL_VERSION }, origin),
+        ]);
+        const session = await this.ort!.InferenceSession.create(recBytes);
+        const dict = new TextDecoder().decode(dictBytes).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        this.arabic = { session, decoder: createCtcDecoder(dict, { debug: DEBUG }) };
+        console.log(`[RapidOcrRunner] arabic: ready in ${Date.now() - t0}ms (rec=${recBytes.length}B dict=${dict.length} chars)`);
+        return true;
+      } catch (err) {
+        this.arabicFailed = true;
+        console.warn("[RapidOcrRunner] arabic model unavailable (runner/vision legs take Arabic pages):", err instanceof Error ? err.message : err);
+        return false;
+      } finally {
+        this.arabicPromise = null;
+      }
+    })();
+    return this.arabicPromise;
   }
 
   /**
@@ -405,9 +469,12 @@ export class RapidOcrRunner {
    */
   async recognizeBox(
     box: TextBox,
-    img: ImageBitmap | HTMLCanvasElement
+    img: ImageBitmap | HTMLCanvasElement,
+    rec?: RecModel,
   ): Promise<{ text: string; confidence: number }> {
     if (!this.recSession) await this.init();
+    const session = rec?.session ?? this.recSession!;
+    const decoder = rec?.decoder ?? this.ctcDecoder!;
 
     const REC_HEIGHT = 48; // PP-OCRv4 rec fixed input height
     const REC_MAX_WIDTH = 2048;
@@ -420,13 +487,13 @@ export class RapidOcrRunner {
     cropped.close();
 
     const input = new this.ort!.Tensor("float32", data, [1, 3, REC_HEIGHT, recW]);
-    const recInputName = this.recSession!.inputNames[0]!;
-    const outputs = await this.recSession!.run({ [recInputName]: input });
-    const output = outputs[this.recSession!.outputNames[0]!]!; // shape: [1, seq_len, num_chars]
+    const recInputName = session.inputNames[0]!;
+    const outputs = await session.run({ [recInputName]: input });
+    const output = outputs[session.outputNames[0]!]!; // shape: [1, seq_len, num_chars]
 
     // The rec export's output IS float32 probabilities (the shared decoder's layout probe
     // verifies range [0,1] on the first row) — narrow the ort Tensor union into a TensorLike.
-    return this.ctcDecoder!.decodeRow(
+    return decoder.decodeRow(
       { dims: output.dims, data: output.data as Float32Array },
       0,
     );
@@ -454,7 +521,8 @@ export class RapidOcrRunner {
    */
   private async recognizeAll(
     boxes: TextBox[],
-    img: ImageBitmap | HTMLCanvasElement
+    img: ImageBitmap | HTMLCanvasElement,
+    rec?: RecModel,
   ): Promise<void> {
     if (boxes.length === 0) return;
     if (!this.recSession) await this.init();
@@ -463,8 +531,8 @@ export class RapidOcrRunner {
     // A failed box (degenerate crop / shape error) blanks only itself; the loop continues.
     for (const box of boxes) {
       try {
-        const { text, confidence } = await this.recognizeBox(box, img);
-        box.text = text;
+        const { text, confidence } = await this.recognizeBox(box, img, rec);
+        box.text = rec ? reverseArabic(text) : text;
         box.recConf = confidence;
       } catch (err) {
         box.text = "";
@@ -483,8 +551,12 @@ export class RapidOcrRunner {
    * see recognizeAll for why batching was measured to be a net LOSS in this ~1.4×-threaded WASM
    * regime). Per-box error isolation is inherent.
    */
-  async recognize(img: ImageBitmap | HTMLCanvasElement): Promise<TextBox[]> {
+  async recognize(img: ImageBitmap | HTMLCanvasElement, script?: string): Promise<TextBox[]> {
     const boxes = await this.detect(img);
+    // Arabic page: use the Arabic rec model when it loads (lazy download on first use).
+    const useArabic = script === "arabic" && (await this.loadArabic());
+    const rec = useArabic ? this.arabic! : undefined;
+    this.lastScript = useArabic ? "arabic" : "latin";
 
     // Pre-recognition geometry filter (#2): drop boxes too small to hold legible text BEFORE
     // paying for recognition. A sub-MIN_BOX_SIDE_PX box is detection noise (a texture edge, a
@@ -494,11 +566,35 @@ export class RapidOcrRunner {
     const droppedGeo = boxes.length - recBoxes.length;
 
     const tRec = performance.now();
-    await this.recognizeAll(recBoxes, img);
+    await this.recognizeAll(recBoxes, img, rec);
     dbg(
       `[RapidOcrRunner] rec timing: ${recBoxes.length} boxes in ${(performance.now() - tRec).toFixed(0)}ms` +
       (droppedGeo > 0 ? ` (detected ${boxes.length}, dropped ${droppedGeo} sub-${MIN_BOX_SIDE_PX}px pre-rec)` : "")
     );
+
+    // Mixed EN/AR page: the Latin model dropped or barely read a large share of boxes → fetch
+    // the Arabic model (if allowed) and re-read exactly those boxes, keeping the better read.
+    const weak = (b: TextBox) => (b.recConf ?? 0) < WEAK_BOX_CONFIDENCE;
+    const weakBoxes = recBoxes.filter(weak);
+    if (!useArabic && recBoxes.length >= 2 && weakBoxes.length / recBoxes.length >= UNREADABLE_SCRIPT_RATIO && (await this.loadArabic())) {
+      let swapped = 0;
+      for (const box of weakBoxes) {
+        try {
+          const ar = await this.recognizeBox(box, img, this.arabic!);
+          if (ar.confidence > (box.recConf ?? 0)) {
+            box.text = reverseArabic(ar.text);
+            box.recConf = ar.confidence;
+            swapped++;
+          }
+        } catch {
+          // keep the Latin read
+        }
+      }
+      if (swapped > 0) {
+        this.lastScript = "mixed";
+        dbg(`[RapidOcrRunner] mixed-script page: ${swapped}/${weakBoxes.length} weak boxes re-read with the Arabic model`);
+      }
+    }
 
     // Per-box confidence filter (#1): drop boxes the rec model read POORLY — an unsupported
     // script (Arabic via a Latin model), detection noise, a degenerate crop — from BOTH the
@@ -740,8 +836,10 @@ export class RapidOcrRunner {
   dispose(): void {
     void this.detSession?.release();
     void this.recSession?.release();
+    void this.arabic?.session.release();
     this.detSession = null;
     this.recSession = null;
+    this.arabic = null;
   }
 }
 
@@ -766,6 +864,13 @@ export function createRapidOcrRunner(opts?: {
   /** Emit OCR telemetry (init timing, det/rec stats, box geometry, CTC layout). Default true.
    *  Pass `false` (or `import.meta.env.DEV`) to silence in production. */
   debug?: boolean,
+  /**
+   * Arabic PP-OCRv5 rec model in the browser. "lazy" (default): downloaded (≈8 MB, cached in
+   * IndexedDB) the first time an Arabic or mixed-script page is met, so Arabic scans stay on
+   * the device; "eager": fetched with the Latin models; "off": Arabic pages go to the runner /
+   * vision legs.
+   */
+  arabic?: ArabicModelMode,
 }): OcrRunner {
   DEBUG = opts?.debug ?? true;
   // Mirror the runner's debug flag into dbPostProcess so the same option silences
@@ -783,6 +888,7 @@ export function createRapidOcrRunner(opts?: {
   }
 
   return {
+    scripts: runner.arabicMode === "off" ? ["latin"] : ["latin", "arabic"],
     async recognize(image, ctx) {
       if (ctx.signal?.aborted) throw new Error("aborted");
 
@@ -797,7 +903,8 @@ export function createRapidOcrRunner(opts?: {
       const bitmap = await createImageBitmap(blob);
 
       // Run full recognition (sets runner.docConfidence — the length-weighted per-box mean)
-      const boxes = await runner.recognize(bitmap);
+      const boxes = await runner.recognize(bitmap, ctx.script);
+      const script = runner.lastScript;
 
       // Order boxes into reading order before joining, so the text the agent receives reads
       // top-to-bottom, left-to-right. Detection returns boxes in SCORE order, which scrambles
@@ -805,11 +912,11 @@ export function createRapidOcrRunner(opts?: {
       // the same visual line have near-equal top edges (grouped by the 5px tolerance); distinct
       // text lines are tens of px apart, so the tolerance cleanly separates them.
       const readingOrder = readingOrderSort(boxes);
-      const text = readingOrder.map((b) => b.text || "").join("\n");
+      const text = (script === "arabic" ? rtlRows(readingOrder) : readingOrder).map((b) => b.text || "").join("\n");
       const conf = runner.docConfidence;
       dbg(
         `[RapidOcrRunner] end-to-end ${(performance.now() - tTotal).toFixed(0)}ms ` +
-        `(init ${initCold ? "cold — compiled this turn" : "warm — cached"}).`
+        `(init ${initCold ? "cold — compiled this turn" : "warm — cached"}, script ${script}).`
       );
 
       // ── Confidence gate (garbage indicator → VLM fallback) ──────────────────────
@@ -828,14 +935,14 @@ export function createRapidOcrRunner(opts?: {
           `(risk ${((1 - conf) * 100).toFixed(1)}% > ${((1 - OCR_CONFIDENCE_FLOOR) * 100).toFixed(0)}%) — ` +
           `discarding ${text.length} chars of OCR text, escalating to edge VLM via under-yield.`
         );
-        return { text: "", confidence: conf, ...runner.lastStats, script: "latin" };
+        return { text: "", confidence: conf, ...runner.lastStats, script };
       }
 
       dbg(
         "[RapidOcrRunner] Final OCR text length:", text.length,
         "conf:", conf.toFixed(3)
       );
-      return { text, confidence: conf, ...runner.lastStats, script: "latin" };
+      return { text, confidence: conf, ...runner.lastStats, script };
     },
 
     dispose() {

@@ -10,6 +10,7 @@ import {
 } from "../engines/rapidocr/db-postprocess.js";
 import { createCtcDecoder } from "../engines/rapidocr/shared/ctc-decode.js";
 import { readingOrderSort } from "../engines/rapidocr/shared/reading-order.js";
+import { reverseArabic, rtlRows } from "../engines/rapidocr/shared/arabic.js";
 import {
   lengthWeightedConfidence,
   minBoxSide,
@@ -250,38 +251,7 @@ const REC_HEIGHT = 48;
 /** Rec input width cap. */
 const REC_MAX_WIDTH = 2048;
 
-/**
- * PaddleOCR `pred_reverse` for Arabic: the rec model emits characters in visual
- * (left-to-right image) order; reverse to logical order while keeping Latin/digit
- * runs intact.
- */
-export function reverseArabic(pred: string): string {
-  const parts: string[] = [];
-  let run = "";
-  for (const c of pred) {
-    if (/[a-zA-Z0-9 :*./%+-]/.test(c)) run += c;
-    else {
-      if (run) parts.push(run);
-      parts.push(c);
-      run = "";
-    }
-  }
-  if (run) parts.push(run);
-  return parts.reverse().join("");
-}
-
-/** Arabic reading order: boxes on the same row read right-to-left. */
-function rtlRows(sorted: TextBox[]): TextBox[] {
-  const rows: TextBox[][] = [];
-  const cy = (b: TextBox) => b.points.reduce((a, p) => a + p[1]!, 0) / b.points.length;
-  const h = (b: TextBox) => Math.max(...b.points.map((p) => p[1]!)) - Math.min(...b.points.map((p) => p[1]!));
-  for (const b of sorted) {
-    const row = rows[rows.length - 1];
-    if (row && Math.abs(cy(row[0]!) - cy(b)) < h(row[0]!) / 2) row.push(b);
-    else rows.push([b]);
-  }
-  return rows.flatMap((r) => r.reverse());
-}
+export { reverseArabic } from "../engines/rapidocr/shared/arabic.js";
 
 async function recognizeImage(
   model: ServerModel,

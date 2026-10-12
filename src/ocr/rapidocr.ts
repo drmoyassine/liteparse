@@ -23,8 +23,10 @@ import type { OcrContext, OcrEngine, OcrResult } from "../types.js";
 export interface OcrRunner {
   recognize(
     image: Uint8Array,
-    ctx: { signal?: AbortSignal },
+    ctx: { signal?: AbortSignal; script?: string },
   ): Promise<{ text: string; confidence?: number; totalBoxes?: number; droppedBoxes?: number; weakBoxes?: number; script?: string }>;
+  /** Scripts the runner has recognition models for (unset ⇒ ["latin"]). */
+  readonly scripts?: readonly string[];
   /** Optional: release model sessions / WASM resources. */
   dispose?(): void;
 }
@@ -37,8 +39,9 @@ export function createRapidOcrEngine(opts: RapidOcrOptions): OcrEngine {
   return {
     name: "rapidocr",
     available: true,
+    scripts: opts.runner.scripts ?? ["latin"],
     async recognize(image: Uint8Array, ctx: OcrContext): Promise<OcrResult> {
-      const out = await opts.runner.recognize(image, { signal: ctx.signal });
+      const out = await opts.runner.recognize(image, { signal: ctx.signal, script: ctx.script });
       return { ...out, text: (out.text ?? "").trim() };
     },
   };

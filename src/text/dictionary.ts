@@ -6,7 +6,8 @@
  * flagged native pages are re-read through the cascade.
  *
  * Built-in lists are compact (long English words + common Arabic words); pass your
- * own via `words` for domain vocabularies.
+ * own via `words` / `wordList` for domain vocabularies, and `ignore` for proper nouns
+ * that sit one letter away from a dictionary word.
  */
 import type { DictionaryCheck, DictionaryReport } from "../types.js";
 
@@ -99,15 +100,35 @@ function normalize(w: string): string {
 
 const EN_SUFFIXES = ["ies", "es", "s", "ed", "ing", "ly", "al"];
 
+/**
+ * Parse a word-list file: one word per line (or whitespace/comma separated),
+ * `#` comments ignored. Lets an AMS feed its own vocabulary (institution names,
+ * programme titles, Arabic terms) straight from a text file.
+ */
+export function parseWordList(text: string): string[] {
+  return text
+    .split("\n")
+    .map((l) => l.replace(/#.*$/, "").trim())
+    .filter(Boolean)
+    .flatMap((l) => l.split(/[\s,;]+/))
+    .filter(Boolean);
+}
+
 export interface DictionaryOptions {
   /** Extra / replacement vocabulary. */
   words?: Iterable<string>;
+  /** Word-list file contents (see {@link parseWordList}) — merged with `words`. */
+  wordList?: string;
+  /** Words never flagged, even when one letter away from a known word (e.g. "Qassim" vs "Qassam"). */
+  ignore?: Iterable<string>;
   /** Built-in lists to include. Default both. Pass [] to use only `words`. */
   builtIn?: Array<"en" | "ar">;
   /** Minimum word length checked (shorter words have too many near-neighbours). Default 7. */
   minWordLength?: number;
   /** Suspect words needed to flag a page. Default 1. */
   minSuspects?: number;
+  /** Flag only when suspects / checked words ≥ this share (0 = ignore). Default 0. */
+  minSuspectRatio?: number;
   /** Re-read flagged pages through the cascade. Default false (flag only). */
   escalate?: boolean;
 }
@@ -117,40 +138,55 @@ export function createDictionaryCheck(opts: DictionaryOptions = {}): DictionaryC
   const builtIn = opts.builtIn ?? ["en", "ar"];
   const minLen = opts.minWordLength ?? 7;
   const minSuspects = opts.minSuspects ?? 1;
+  const minRatio = opts.minSuspectRatio ?? 0;
   const known = new Set<string>();
   const add = (w: string) => w && known.add(normalize(w));
   if (builtIn.includes("en")) EN_WORDS.split(/\s+/).forEach(add);
   if (builtIn.includes("ar")) AR_WORDS.split(/\s+/).forEach(add);
   for (const w of opts.words ?? []) add(w);
+  if (opts.wordList) parseWordList(opts.wordList).forEach(add);
+  const ignore = new Set<string>();
+  for (const w of opts.ignore ?? []) if (w) ignore.add(normalize(w));
 
-  // Same-length neighbourhood keys: word with position i wildcarded (substitution),
-  // plus adjacent-swap forms (transposition).
-  const subKeys = new Set<string>();
-  const swaps = new Set<string>();
+  // Same-length neighbourhood keys → the known word they came from: position i wildcarded
+  // (substitution) and adjacent-swap forms (transposition).
+  const subKeys = new Map<string, string>();
+  const swaps = new Map<string, string>();
   for (const w of known) {
-    for (let i = 0; i < w.length; i++) subKeys.add(`${w.slice(0, i)}\u0000${w.slice(i + 1)}`);
-    for (let i = 0; i + 1 < w.length; i++) swaps.add(w.slice(0, i) + w[i + 1] + w[i] + w.slice(i + 2));
+    for (let i = 0; i < w.length; i++) {
+      const k = `${w.slice(0, i)}\u0000${w.slice(i + 1)}`;
+      if (!subKeys.has(k)) subKeys.set(k, w);
+    }
+    for (let i = 0; i + 1 < w.length; i++) {
+      const k = w.slice(0, i) + w[i + 1] + w[i] + w.slice(i + 2);
+      if (!swaps.has(k)) swaps.set(k, w);
+    }
   }
 
   const isKnown = (w: string): boolean => {
-    if (known.has(w)) return true;
+    if (known.has(w) || ignore.has(w)) return true;
     for (const suf of EN_SUFFIXES) {
-      if (w.endsWith(suf) && known.has(w.slice(0, -suf.length))) return true;
+      if (w.endsWith(suf) && (known.has(w.slice(0, -suf.length)) || ignore.has(w.slice(0, -suf.length)))) return true;
       if (suf === "ies" && w.endsWith(suf) && known.has(w.slice(0, -3) + "y")) return true;
     }
     return false;
   };
 
-  const isNearMiss = (w: string): boolean => {
-    if (swaps.has(w)) return true;
-    for (let i = 0; i < w.length; i++) if (subKeys.has(`${w.slice(0, i)}\u0000${w.slice(i + 1)}`)) return true;
-    return false;
+  const nearest = (w: string): string | undefined => {
+    const swap = swaps.get(w);
+    if (swap) return swap;
+    for (let i = 0; i < w.length; i++) {
+      const hit = subKeys.get(`${w.slice(0, i)}\u0000${w.slice(i + 1)}`);
+      if (hit) return hit;
+    }
+    return undefined;
   };
 
   return {
     escalate: opts.escalate ?? false,
     check(text: string): DictionaryReport {
       const suspects: string[] = [];
+      const suggestions: Record<string, string> = {};
       let words = 0;
       for (const raw of text.match(/[\p{L}\p{M}]+/gu) ?? []) {
         if (raw.length < minLen) continue;
@@ -158,9 +194,14 @@ export function createDictionaryCheck(opts: DictionaryOptions = {}): DictionaryC
         const w = normalize(raw);
         words++;
         if (isKnown(w)) continue;
-        if (isNearMiss(w)) suspects.push(raw);
+        const near = nearest(w);
+        if (near) {
+          suspects.push(raw);
+          suggestions[raw] = near;
+        }
       }
-      return { words, suspects, flagged: suspects.length >= minSuspects };
+      const ratio = words ? suspects.length / words : 0;
+      return { words, suspects, suggestions, ratio, flagged: suspects.length >= minSuspects && ratio >= minRatio };
     },
   };
 }

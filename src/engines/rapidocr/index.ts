@@ -18,7 +18,10 @@
  */
 
 export { createRapidOcrRunner } from "./rapidocr-onnx-runner.js";
+export type { ArabicModelMode } from "./rapidocr-onnx-runner.js";
 export { createPublicModelOrigin } from "./model-origin-hf.js";
+export { reverseArabic, rtlRows, arabicLetterCount } from "./shared/arabic.js";
+export { ARABIC_DICT } from "./shared/arabic-dict.js";
 
 // Re-export types for convenience
 export type { OcrContext, OcrResult, OcrEngine } from "../../types.js";

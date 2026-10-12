@@ -20,3 +20,10 @@ apps/runner/models/moonshine/**/*.onnx
 # Track 3 spike artifacts (apps/runner/scripts/spike-moonshine.mjs) — findings
 # land in ROADMAP.md, the files never leave the dev machine
 apps/runner/.spike-moonshine/
+.env
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials

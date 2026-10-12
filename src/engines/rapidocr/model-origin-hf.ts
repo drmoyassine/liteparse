@@ -1,4 +1,5 @@
 import type { ModelDescriptor, ModelOrigin } from "../../worker/model-origin.js";
+import { ARABIC_DICT_TEXT } from "./shared/arabic-dict.js";
 
 /**
  * Public-source model origin for the OCR Web Worker (browser-only).
@@ -48,7 +49,19 @@ function toModelUrl(descriptor: ModelDescriptor): string {
   if (descriptor.id.startsWith("pp-ocrv4-dict-latin")) {
     return self.location.origin + "/models/ppocr-en-dict.txt";
   }
+  // Arabic PP-OCRv5 recognition (RapidAI's official ONNX export — the same bytes the runner
+  // uses; ModelScope serves `access-control-allow-origin: *`). Fetched lazily, only when an
+  // Arabic page is met, and cached in IndexedDB like the Latin models.
+  if (descriptor.id.startsWith("pp-ocrv5-rec-arabic")) {
+    return "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv5/rec/arabic_PP-OCRv5_rec_mobile.onnx";
+  }
   throw new Error(`unknown model id: ${descriptor.id} (add to toModelUrl mapping)`);
+}
+
+/** Ids whose bytes ship inside the library (no network): the Arabic CTC dictionary. */
+function embeddedModel(descriptor: ModelDescriptor): Uint8Array | null {
+  if (descriptor.id.startsWith("pp-ocrv5-dict-arabic")) return new TextEncoder().encode(ARABIC_DICT_TEXT);
+  return null;
 }
 
 /**
@@ -62,6 +75,8 @@ function toModelUrl(descriptor: ModelDescriptor): string {
 export function createPublicModelOrigin(): ModelOrigin {
   return {
     async fetchModel(d: ModelDescriptor): Promise<Uint8Array> {
+      const embedded = embeddedModel(d);
+      if (embedded) return embedded;
       const url = toModelUrl(d);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout

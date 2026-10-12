@@ -369,6 +369,10 @@ export interface DictionaryReport {
   words: number;
   /** Unknown words one edit away from a known word ("Accrtditation"). */
   suspects: string[];
+  /** Suspect → the known word it is one edit away from. */
+  suggestions?: Record<string, string>;
+  /** suspects / words. */
+  ratio?: number;
   flagged: boolean;
 }
 
@@ -377,6 +381,20 @@ export interface DictionaryCheck {
   check(text: string): DictionaryReport;
   /** Send flagged pages down the cascade instead of only flagging them. Default false. */
   readonly escalate?: boolean;
+}
+
+/** A cached OCR/vision page result (everything but its position in the document). */
+export type CachedPage = Omit<Page, "index" | "pageNumber">;
+
+/**
+ * Per-page result cache for OCR/vision pages: re-uploading a long PDF skips pages that
+ * were already read. Keys are content-addressed (document hash + page + script), so
+ * unchanged pages hit regardless of filename. Implementations must never throw
+ * (a broken cache is a miss). See `createMemoryPageCache` / `createIndexedDbPageCache`.
+ */
+export interface PageCache {
+  get(key: string): Promise<CachedPage | undefined>;
+  set(key: string, page: CachedPage): Promise<void>;
 }
 
 /**
