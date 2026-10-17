@@ -13,6 +13,7 @@ import {
   type MoonshineServerEngine,
   type MoonshineServerOptions,
 } from "@drmoyassine/liteparse/stt/moonshine-server";
+import { looksLikeOggOpus, transcodeOggOpusToWav } from "./audio-transcode.js";
 import type { RequestedTranscribeOptions } from "./types.js";
 
 /**
@@ -97,14 +98,32 @@ export function createSttService(deps: SttServiceDeps = {}): SttService {
         parseWavPcm16(bytes);
       } catch (err) {
         if (err instanceof WavError) {
-          throw new TranscribeHttpError(
-            422,
-            `audio is not WAV PCM16 (${err.code}: ${err.message}) — the runner contract is ` +
-              `WAV PCM16 (mono 16 kHz ideal; other rates/channels are mixed + resampled). ` +
-              `Decode client-side (decodeAudioData → encodeWavPcm16) and POST the WAV.`,
-          );
+          // TASK-221: channel voice notes are Ogg Opus (WhatsApp standard) and
+          // server callers have no AudioContext — decode locally (pure WASM,
+          // audio never leaves the box) instead of bouncing a 422.
+          if (looksLikeOggOpus(bytes)) {
+            try {
+              const t = await transcodeOggOpusToWav(bytes);
+              bytes = t.wav;
+              warnings.push(`transcoded: ogg/opus → wav pcm16 locally (${t.durationMs} ms audio)`);
+            } catch (te) {
+              throw new TranscribeHttpError(
+                422,
+                `ogg/opus transcode failed (${te instanceof Error ? te.message : String(te)}) — ` +
+                  `the stream carried no decodable audio`,
+              );
+            }
+          } else {
+            throw new TranscribeHttpError(
+              422,
+              `audio is not WAV PCM16 (${err.code}: ${err.message}) — the runner contract is ` +
+                `WAV PCM16 (mono 16 kHz ideal; other rates/channels are mixed + resampled). ` +
+                `Decode client-side (decodeAudioData → encodeWavPcm16) and POST the WAV.`,
+            );
+          }
+        } else {
+          throw err;
         }
-        throw err;
       }
 
       // ── local slots: slot 1 per language, slot 2 (EN only) = strictly stronger model.
