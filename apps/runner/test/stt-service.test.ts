@@ -272,12 +272,12 @@ describe("WAV contract (422)", () => {
     expect(createEngine).not.toHaveBeenCalled();
   });
 
-  it("rejects a truncated WAV with the specific WavError code", async () => {
+  it("rejects a truncated WAV with a 422 naming the failure (TASK-221: ffmpeg transcode leg)", async () => {
     const { service } = buildService({ [SLOT1_EN]: fakeEngine() });
     const truncated = wavBytes().slice(0, 30);
     await expect(service.transcribe(truncated, "a.wav", {}, undefined)).rejects.toMatchObject({
       status: 422,
-      message: expect.stringMatching(/truncated|not_wav|missing/),
+      message: expect.stringMatching(/truncated|not_wav|missing|transcode failed|invalid data/i),
     });
   });
 });

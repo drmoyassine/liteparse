@@ -2,10 +2,10 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  ffmpegAvailable,
   floatToPcm16,
   looksLikeOggOpus,
-  resampleTo16k,
-  transcodeOggOpusToWav,
+  transcodeToWav,
   wrapWavPcm16,
 } from "../src/audio-transcode.js";
 
@@ -50,24 +50,6 @@ describe("looksLikeOggOpus", () => {
   });
 });
 
-describe("resampleTo16k", () => {
-  it("passes through 16 kHz input untouched", () => {
-    const input = new Float32Array([0.1, -0.2, 0.3]);
-    expect(resampleTo16k(input, 16000)).toBe(input);
-  });
-
-  it("downsamples 48 kHz → 16 kHz preserving length ratio and DC level", () => {
-    const input = new Float32Array(480).fill(0.5);
-    const out = resampleTo16k(input, 48000);
-    expect(out.length).toBe(160);
-    for (const v of out) expect(v).toBeCloseTo(0.5, 5);
-  });
-
-  it("handles mono-sample input", () => {
-    expect(resampleTo16k(new Float32Array([0.25]), 48000).length).toBeGreaterThanOrEqual(1);
-  });
-});
-
 describe("floatToPcm16 + wrapWavPcm16", () => {
   it("clamps and quantizes to int16", () => {
     const pcm = floatToPcm16(new Float32Array([0.5, -0.5, 2.0, -2.0]));
@@ -100,15 +82,16 @@ describe("floatToPcm16 + wrapWavPcm16", () => {
 // test/fixtures/voice-note.ogg to enable; the live acceptance evidence is a
 // real WhatsApp voice note flowing through the channel after deploy.
 const REAL_FIXTURE = resolve(__dirname, "fixtures/voice-note.ogg");
-describe.skipIf(!existsSync(REAL_FIXTURE))("transcodeOggOpusToWav (real fixture)", () => {
+describe.skipIf(!existsSync(REAL_FIXTURE))("transcodeToWav (real fixture)", () => {
   it("decodes to non-silent 16 kHz mono WAV PCM16", async () => {
     const { readFileSync } = await import("node:fs");
     const ogg = new Uint8Array(readFileSync(REAL_FIXTURE));
     expect(looksLikeOggOpus(ogg)).toBe(true);
-    const { wav, durationMs } = await transcodeOggOpusToWav(ogg);
+    expect(await ffmpegAvailable()).toBe(true);
+    const { wav, durationMs } = await transcodeToWav(ogg);
     expect(durationMs).toBeGreaterThan(0);
     expect(wav.length).toBeGreaterThan(44);
-    expect(wav.subarray(0, 4).toString()).toBe("RIFF");
+    expect(String.fromCharCode(...wav.subarray(0, 4))).toBe("RIFF");
     const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
     expect(view.getUint32(24, true)).toBe(16000);
     let peak = 0;

@@ -13,7 +13,7 @@ import {
   type MoonshineServerEngine,
   type MoonshineServerOptions,
 } from "@drmoyassine/liteparse/stt/moonshine-server";
-import { looksLikeOggOpus, transcodeOggOpusToWav } from "./audio-transcode.js";
+import { looksLikeOggOpus, transcodeToWav } from "./audio-transcode.js";
 import type { RequestedTranscribeOptions } from "./types.js";
 
 /**
@@ -99,26 +99,24 @@ export function createSttService(deps: SttServiceDeps = {}): SttService {
       } catch (err) {
         if (err instanceof WavError) {
           // TASK-221: channel voice notes are Ogg Opus (WhatsApp standard) and
-          // server callers have no AudioContext — decode locally (pure WASM,
-          // audio never leaves the box) instead of bouncing a 422.
-          if (looksLikeOggOpus(bytes)) {
-            try {
-              const t = await transcodeOggOpusToWav(bytes);
-              bytes = t.wav;
-              warnings.push(`transcoded: ogg/opus → wav pcm16 locally (${t.durationMs} ms audio)`);
-            } catch (te) {
-              throw new TranscribeHttpError(
-                422,
-                `ogg/opus transcode failed (${te instanceof Error ? te.message : String(te)}) — ` +
-                  `the stream carried no decodable audio`,
-              );
-            }
-          } else {
+          // server callers have no AudioContext — transcode locally via the
+          // bundled ffmpeg (audio never leaves the box) instead of bouncing a
+          // 422. The old WASM attempt (ogg-opus-decoder) was disqualified: it
+          // silently returned zero frames on real voice notes.
+          try {
+            const wasOggOpus = looksLikeOggOpus(bytes);
+            const t = await transcodeToWav(bytes);
+            bytes = t.wav;
+            warnings.push(
+              `transcoded: ${wasOggOpus ? "ogg/opus" : "compressed audio"} → ` +
+                `wav pcm16 locally (${t.durationMs} ms audio)`,
+            );
+          } catch (te) {
             throw new TranscribeHttpError(
               422,
-              `audio is not WAV PCM16 (${err.code}: ${err.message}) — the runner contract is ` +
-                `WAV PCM16 (mono 16 kHz ideal; other rates/channels are mixed + resampled). ` +
-                `Decode client-side (decodeAudioData → encodeWavPcm16) and POST the WAV.`,
+              `audio transcode failed (${te instanceof Error ? te.message : String(te)}) — ` +
+                `the runner contract is WAV PCM16, and the bundled ffmpeg could ` +
+                `not decode the stream`,
             );
           }
         } else {
