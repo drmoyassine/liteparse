@@ -245,6 +245,13 @@ as a packed tarball, not a symlink, so the runtime tree is self-contained.
 | `RUNNER_MAX_BYTES` | `20971520` | decoded document cap (20 MB) |
 | `RUNNER_STT_MAX_TOTAL_MS` | `60000` | whole-request deadline, `/transcribe` |
 | `RUNNER_STT_MAX_BYTES` | `26214400` | decoded audio cap (25 MB) |
+| `VLM_GATEWAY_ENDPOINT` / `VLM_GATEWAY_API_KEY` / `VLM_GATEWAY_MODEL` / `VLM_GATEWAY_KEY_HEADER` | — | optional cloud-VLM default for `/parse`: applies ONLY when the caller passes no `options.vlm` (caller config always wins). All-or-nothing; the key is redacted from every log. |
+| `STT_GATEWAY_ENDPOINT` / `STT_GATEWAY_API_KEY` / `STT_GATEWAY_MODEL` / `STT_GATEWAY_KEY_HEADER` | — | optional cloud-STT default for `/transcribe` (slot 3): applies ONLY when the caller passes no `options.stt`; fires after both local Moonshine slots miss their floors. All-or-nothing; key redacted. |
+
+Runner-side fallback gateways (owner, 2026-10-19 — amends the earlier
+"runner stores no secrets" posture): agents that cannot resolve credentials
+(masteragent, n8n) inherit the cloud fallback from these env vars, while
+callers that resolve their own config (studygram's edge) keep full control.
 
 ## Tests
 

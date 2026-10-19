@@ -3,6 +3,7 @@ import { isDeadlineError } from "../limits.js";
 import { withDeadline, type Semaphore } from "../limits.js";
 import { logRequest, newRequestId, redactVlm } from "../log.js";
 import { TranscribeHttpError, type SttService } from "../stt-service.js";
+import { defaultSttFromEnv, withDefaultStt } from "../gateway-defaults.js";
 import type {
   ErrorJson,
   RequestedTranscribeOptions,
@@ -71,7 +72,11 @@ export function createTranscribeHandler(deps: {
         `options=${JSON.stringify(redactVlm(body.options ?? {}))}`,
     );
     try {
-      const result = await deps.service.transcribe(bytes, body.filename, body.options, deadline.signal);
+      // Runner-side cloud-STT default (owner 2026-10-19): applies only when
+      // the caller supplied none; injected AFTER the request log so the env
+      // key is never logged.
+      const serviceOptions = withDefaultStt(body.options, defaultSttFromEnv());
+      const result = await deps.service.transcribe(bytes, body.filename, serviceOptions, deadline.signal);
       const json: TranscribeResponseJson = {
         text: result.text,
         language: result.language,

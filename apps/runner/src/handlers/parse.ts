@@ -4,6 +4,7 @@ import type { ErrorJson, ParseRequestBody, ParseResponseJson } from "../types.js
 import { isDeadlineError } from "../limits.js";
 import { withDeadline, type Semaphore } from "../limits.js";
 import { logRequest, newRequestId, redactVlm } from "../log.js";
+import { defaultVlmFromEnv, withDefaultVlm } from "../gateway-defaults.js";
 
 /**
  * POST /parse — the whole HTTP contract lives here: request validation, size
@@ -62,7 +63,11 @@ export function createParseHandler(deps: {
         `options=${JSON.stringify(redactVlm(body.options ?? {}))}`,
     );
     try {
-      const result = await deps.service(bytes, body.filename, body.options, deadline.signal);
+      // Runner-side cloud-VLM default (owner 2026-10-19): applies only when
+      // the caller supplied none; injected AFTER the request log so the env
+      // key is never logged.
+      const serviceOptions = withDefaultVlm(body.options, defaultVlmFromEnv());
+      const result = await deps.service(bytes, body.filename, serviceOptions, deadline.signal);
       const json: ParseResponseJson = {
         text: result.text,
         kind: result.kind,
