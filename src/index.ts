@@ -68,6 +68,10 @@ export type {
 // here for convenience; the subpath stays the canonical import for consumers.
 export { createServerSttGateway } from "./stt/gateway.server.js";
 export type { ServerSttOptions } from "./stt/gateway.server.js";
+// Track 3 (speech): the language:"auto" core — dual slot-1 decode + evidence
+// pick, shared by both Moonshine engines and the runner's escalation walk.
+export { isDegenerate, pickAutoLanguage, transcribeAuto } from "./stt/auto.js";
+export type { AutoPick, TranscribeAutoHooks } from "./stt/auto.js";
 // Track 3 (speech): the local Moonshine engine for Node (onnxruntime-node) is
 // subpath-only ("@drmoyassine/liteparse/stt/moonshine-server"), like ./ocr/rapidocr-server —
 // it imports node builtins and must stay out of the isomorphic core bundle.

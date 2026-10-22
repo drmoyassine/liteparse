@@ -61,6 +61,7 @@ import { resolveModel, createThrowModelOrigin } from "../../worker/model-origin.
 // copy into that bundle and overwrite the worker's onmessage (the RapidOCR
 // double-shell bug). The model origin is INJECTED, never read from worker config.
 import type { SttEngine, SttResult, SttTranscribeOptions } from "../../types.js";
+import { transcribeAuto } from "../../stt/auto.js";
 import { MODEL_SAMPLE_RATE, resample, wavToModelAudio, type ModelAudio } from "./shared/audio.js";
 import { parseWavPcm16, WavError } from "./shared/wav.js";
 import { loadTokenizer, stripTashkeel, type Tokenizer } from "./shared/tokens.js";
@@ -103,8 +104,11 @@ export interface MoonshineBrowserOptions {
   modelOrigin?: ModelOrigin;
   /** Force one model for every call (default: slot-1 model per language). */
   model?: MoonshineModelId | (string & {});
-  /** Default language when transcribe() carries none (default "en"). */
-  language?: SttLanguage;
+  /**
+   * Default language when transcribe() carries none ("auto" — dual slot-1
+   * decode + evidence pick, stt/auto.ts — is the effective default).
+   */
+  language?: SttLanguage | "auto";
   /** Emit STT telemetry — the stt-lab line per transcribe (default true). */
   debug?: boolean;
   /** Keep Arabic diacritics (default: strip tashkeel — shared/tokens.ts policy). */
@@ -147,14 +151,55 @@ export class MoonshineRunner {
     if (topts.signal?.aborted) throw new Error("aborted");
     const t0 = performance.now();
 
-    const language: SttLanguage = topts.language ?? this.opts.language ?? "en";
+    // Container bytes → 16 kHz mono ONCE (both auto slots decode the same
+    // samples; AudioContext.decodeAudioData detaches buffers, so re-running
+    // audioIn per slot would need a defensive copy anyway).
+    const audio = await this.audioIn(bytes);
+
+    const requested: SttLanguage | "auto" = topts.language ?? this.opts.language ?? "auto";
+
+    if (requested === "auto") {
+      // language:"auto" — dual slot-1 decode + the shared evidence pick
+      // (stt/auto.ts), the browser twin of the runner stt-service's auto mode.
+      // A slot failure nulls (telemetry below); BOTH failing throws, which the
+      // route's per-page catch turns into a warning for the gateway leg.
+      const result = await transcribeAuto(
+        (language) => this.decodePrepared(audio, language, topts).then((d) => d.result),
+        {
+          signal: topts.signal,
+          onSlotError: (language, err) =>
+            dbg(
+              `[moonshine-browser] auto: ${language} slot unavailable: ` +
+                `${err instanceof Error ? err.message : String(err)}`,
+            ),
+        },
+      );
+      dbg(`[moonshine-browser] auto → ${result.language} (${((performance.now() - t0) / 1000).toFixed(2)}s)`);
+      // The winner's model id is deterministic from the picked language (a
+      // forced opts.model pins BOTH slots, so this recomputation matches what
+      // decodePrepared actually loaded).
+      return this.applyConfidenceGate(
+        result,
+        resolveModelId(this.opts.model, result.language, BROWSER_DEFAULT_STT_MODEL),
+      );
+    }
+
+    const { modelId, result } = await this.decodePrepared(audio, requested, topts);
+    return this.applyConfidenceGate(result, modelId);
+  }
+
+  /** One forced-language decode: ensure model → decode loop → tokenizer → telemetry. */
+  private async decodePrepared(
+    audio: ModelAudio,
+    language: SttLanguage,
+    topts: SttTranscribeOptions,
+  ): Promise<{ modelId: string; result: SttResult }> {
     // Browser defaults (BROWSER map): AR = streaming via the CORS-open HF
     // mirror (byte-identical to the official CDN set) — WASM decodes it at
     // RTF ≈ 0.19 single-threaded (measured 2026-09-03), same as native.
     const modelId = resolveModelId(this.opts.model, language, BROWSER_DEFAULT_STT_MODEL);
     const loaded = await this.ensureModel(modelId);
 
-    const audio = await this.audioIn(bytes);
     const decodeStart = performance.now();
     const { ids, logProbs } =
       loaded.model.kind === "streaming"
@@ -166,7 +211,7 @@ export class MoonshineRunner {
     const text = this.opts.keepDiacritics ? raw : stripTashkeel(raw);
     const confidence = tokenConfidence(logProbs, loaded.tokenizer, ids);
 
-    // stt-lab line (one flat record per transcribe; debug-gated like OCR telemetry).
+    // stt-lab line (one flat record per decode; auto logs both slots).
     dbg(
       sttDebugLine({
         modelId,
@@ -180,21 +225,26 @@ export class MoonshineRunner {
         diacriticsStripped: !this.opts.keepDiacritics,
       }),
     );
+    return { modelId, result: { text, confidence, language } };
+  }
 
-    // ── Confidence gate (garbage indicator → external-gateway fallback) ──────
-    // Applied HERE, unlike the server engine: the browser cascade's only
-    // stronger leg is the external stt-gateway, and executeRoute descends to it
-    // on under-yield — so discarding low-confidence text (returning "") IS the
-    // escalation signal. Same shape as the RapidOcrRunner gate; the text-
-    // non-empty guard keeps a genuine no-speech result out of the "discarded" log.
-    if (text.trim().length > 0 && confidence < sttFloorFor(modelId)) {
+  // ── Confidence gate (garbage indicator → external-gateway fallback) ──────
+  // Applied HERE, unlike the server engine: the browser cascade's only
+  // stronger leg is the external stt-gateway, and executeRoute descends to it
+  // on under-yield — so discarding low-confidence text (returning "") IS the
+  // escalation signal. Same shape as the RapidOcrRunner gate; the text-
+  // non-empty guard keeps a genuine no-speech result out of the "discarded"
+  // log. Runs ONCE on the auto pick (a gated slot result would lose the text
+  // the degeneracy/script evidence needs).
+  private applyConfidenceGate(result: SttResult, modelId: string): SttResult {
+    if (result.text.trim().length > 0 && (result.confidence ?? 0) < sttFloorFor(modelId)) {
       dbg(
-        `[moonshine-browser] confidence gate TRIPPED: ${modelId} conf ${confidence.toFixed(3)} < ` +
-          `floor ${sttFloorFor(modelId)} — discarding ${text.length} chars, escalating to the stt-gateway via under-yield.`,
+        `[moonshine-browser] confidence gate TRIPPED: ${modelId} conf ${(result.confidence ?? 0).toFixed(3)} < ` +
+          `floor ${sttFloorFor(modelId)} — discarding ${result.text.length} chars, escalating to the stt-gateway via under-yield.`,
       );
-      return { text: "", confidence, language };
+      return { text: "", confidence: result.confidence, language: result.language };
     }
-    return { text, confidence, language };
+    return result;
   }
 
   /** Preload a language's slot-1 model (mic-intent / app-start warm-up). */
@@ -489,14 +539,27 @@ export function createMoonshineSttEngine(
     name: "moonshine",
     available: true,
     async transcribe(bytes: Uint8Array, topts: SttTranscribeOptions = {}): Promise<SttResult> {
-      const language: SttLanguage = topts.language ?? opts.language ?? "en";
-      if (!languages.includes(language)) {
+      const requested: SttLanguage | "auto" = topts.language ?? opts.language ?? "auto";
+      if (requested !== "auto" && !languages.includes(requested)) {
         throw new Error(
-          `moonshine: language "${language}" is not enabled (languages: ${languages.join(", ")}) — ` +
+          `moonshine: language "${requested}" is not enabled (languages: ${languages.join(", ")}) — ` +
             `the clip falls through to the external gateway`,
         );
       }
-      return runner.transcribe(bytes, topts);
+      const result = await runner.transcribe(bytes, topts);
+      // auto may pick a language outside the enabled set — discard the text so
+      // the route's under-yield hands the clip to the external gateway leg.
+      // (The runner never emits "auto", but the shared option type allows it.)
+      const picked: SttLanguage =
+        result.language === "en" || result.language === "ar" ? result.language : "en";
+      if (requested === "auto" && result.text.trim() !== "" && !languages.includes(picked)) {
+        dbg(
+          `[moonshine-browser] auto picked ${picked} outside the enabled set ` +
+            `(${languages.join(", ")}) — discarding, the gateway leg takes the clip`,
+        );
+        return { text: "", confidence: result.confidence, language: picked };
+      }
+      return result;
     },
     warm: (language: SttLanguage = "en") => runner.warm(language),
     dispose: () => runner.dispose(),

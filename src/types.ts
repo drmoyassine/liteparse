@@ -164,8 +164,12 @@ export interface SttTranscribeOptions {
   filename?: string;
   /** MIME type of the audio bytes (e.g. audio/wav, audio/webm). */
   mime?: string;
-  /** Spoken-language hint. Omitted ⇒ the engine/gateway auto-detects. */
-  language?: "en" | "ar";
+  /**
+   * Spoken-language hint. Omitted or "auto" ⇒ the Moonshine engines
+   * auto-detect (dual slot-1 decode with script/degeneracy/confidence
+   * evidence — stt/auto.ts); external gateways treat "auto" as no hint.
+   */
+  language?: "en" | "ar" | "auto";
   signal?: AbortSignal;
 }
 
@@ -245,8 +249,11 @@ export interface ParseOptions {
    * engine registered via `setBrowserSttEngine`.
    */
   sttEngine?: SttEngine;
-  /** Spoken-language hint for audio documents. Default: auto-detect. */
-  sttLanguage?: "en" | "ar";
+  /**
+   * Spoken-language hint for audio documents. "auto" (the default) dual-decodes
+   * both Moonshine slot-1 models and picks by evidence (stt/auto.ts).
+   */
+  sttLanguage?: "en" | "ar" | "auto";
   /** Inject a configured pdfjs instance (avoids CDN/worker setup). */
   pdfjs?: PdfLibrary;
   /** Abort parsing. */

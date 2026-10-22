@@ -216,7 +216,7 @@ describe("createMoonshineSttEngine — EN streaming family", () => {
     const { mod, ort } = await freshModule();
     const engine = mod.createMoonshineSttEngine({ debug: false, modelOrigin: origin });
 
-    const result = await engine.transcribe(testWav());
+    const result = await engine.transcribe(testWav(), { language: "en" });
     expect(result.text).toBe("hello world");
     expect(result.language).toBe("en");
     // Equal-length tokens: confidence = per-token prob = e^5 / (e^5 + 39) ≥ 0.55 floor.
@@ -267,7 +267,7 @@ describe("createMoonshineSttEngine — EN batch family (base-en, forced)", () =>
       model: "moonshine-batch-base-en",
     });
 
-    const result = await engine.transcribe(testWav());
+    const result = await engine.transcribe(testWav(), { language: "en" });
     expect(result.text).toBe("hello world");
     expect(result.language).toBe("en");
 
@@ -365,7 +365,10 @@ describe("model lifecycle (LRU + dedupe)", () => {
   it("shares one model load across concurrent transcribes of the same language", async () => {
     const { mod, ort } = await freshModule();
     const engine = mod.createMoonshineSttEngine({ debug: false, modelOrigin: fakeOrigin() });
-    const [a, b] = await Promise.all([engine.transcribe(testWav()), engine.transcribe(testWav())]);
+    const [a, b] = await Promise.all([
+      engine.transcribe(testWav(), { language: "en" }),
+      engine.transcribe(testWav(), { language: "en" }),
+    ]);
     expect(a.text).toBe("hello world");
     expect(b.text).toBe("hello world");
     expect(ort.created.filter((t) => t === "frontend")).toHaveLength(1);
@@ -410,7 +413,7 @@ describe("engine contract", () => {
       },
     );
     const engine = mod.createMoonshineSttEngine({ debug: false, modelOrigin: fakeOrigin() });
-    const result = await engine.transcribe(new TextEncoder().encode("fake-webm-opus"));
+    const result = await engine.transcribe(new TextEncoder().encode("fake-webm-opus"), { language: "en" });
     expect(result.text).toBe("hello world");
     // The stereo mixdown averaged to the same 0.25 level → same model input.
     const frontend = ort.runs.find((r) => r.tag === "frontend")!;
@@ -474,8 +477,61 @@ describe("engine contract", () => {
       modelOrigin: fakeOrigin(),
       model: "whisper-large",
     });
-    await unknown.transcribe(testWav());
+    await unknown.transcribe(testWav(), { language: "en" });
     expect(ort.created).toContain("frontend");
+  });
+});
+
+describe("createMoonshineSttEngine — language:auto (the default)", () => {
+  it("dual-decodes both slot-1 models and picks AR on Arabic script", async () => {
+    const origin = fakeOrigin();
+    const { mod, ort } = await freshModule({ streamingTokens: [20, 2] });
+    const engine = mod.createMoonshineSttEngine({ debug: false, modelOrigin: origin });
+
+    // Both decoders play [20, 2]: the EN tokenizer has no id 20 (empty decode),
+    // the AR one reads "محمد" — script evidence picks ar.
+    const result = await engine.transcribe(testWav());
+    expect(result.language).toBe("ar");
+    expect(result.text).toBe("محمد");
+    // BOTH slot-1 models loaded: EN's monolithic frontend AND the AR graph.
+    expect(ort.created.filter((t) => t === "frontend")).toHaveLength(2);
+    expect(ort.created).toContain("frontendWeights"); // the AR weights pair
+  });
+
+  it("picks EN when the AR decode carries no Arabic script (status-quo default)", async () => {
+    const { mod, ort } = await freshModule(); // EN "hello world"; AR reads EN ids → no script
+    const engine = mod.createMoonshineSttEngine({ debug: false, modelOrigin: fakeOrigin() });
+    const result = await engine.transcribe(testWav());
+    expect(result).toMatchObject({ language: "en", text: "hello world" });
+    expect(ort.created.filter((t) => t === "frontend")).toHaveLength(2);
+  });
+
+  it("applies the confidence gate to the auto winner (under-floor → discarded)", async () => {
+    const { mod } = await freshModule({ boost: 0.2 });
+    const engine = mod.createMoonshineSttEngine({ debug: false, modelOrigin: fakeOrigin() });
+    const result = await engine.transcribe(testWav());
+    expect(result.text).toBe(""); // winner (en) below floor → the gateway leg takes it
+    expect(result.language).toBe("en");
+  });
+
+  it("discards an auto pick outside the enabled languages set (gateway leg takes the clip)", async () => {
+    const { mod, ort } = await freshModule({ streamingTokens: [20, 2] });
+    const engine = mod.createMoonshineSttEngine({
+      debug: false,
+      modelOrigin: fakeOrigin(),
+      languages: ["en"],
+    });
+    const result = await engine.transcribe(testWav());
+    expect(result.text).toBe(""); // ar won but is not enabled → under-yield
+    expect(result.language).toBe("ar");
+    expect(ort.created.filter((t) => t === "frontend")).toHaveLength(2); // both decoded first
+  });
+
+  it("explicit language never dual-decodes (both models must not load)", async () => {
+    const { mod, ort } = await freshModule();
+    const engine = mod.createMoonshineSttEngine({ debug: false, modelOrigin: fakeOrigin() });
+    await engine.transcribe(testWav(), { language: "en" });
+    expect(ort.created.filter((t) => t === "frontend")).toHaveLength(1); // EN only
   });
 });
 

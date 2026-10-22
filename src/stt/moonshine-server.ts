@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { SttEngine, SttTranscribeOptions, SttResult } from "../types.js";
+import { transcribeAuto } from "./auto.js";
 import { MODEL_SAMPLE_RATE, wavToModelAudio } from "../engines/moonshine/shared/audio.js";
 import { parseWavPcm16, WavError } from "../engines/moonshine/shared/wav.js";
 
@@ -110,8 +111,11 @@ export interface MoonshineServerOptions {
   modelPath?: string;
   /** Force one model for every call (default: slot-1 model per language). */
   model?: MoonshineModelId | (string & {});
-  /** Default language when transcribe() carries none (default "en"). */
-  language?: SttLanguage;
+  /**
+   * Default language when transcribe() carries none ("auto" — dual slot-1
+   * decode + evidence pick, stt/auto.ts — is the effective default).
+   */
+  language?: SttLanguage | "auto";
   /** Emit STT telemetry (default true). */
   debug?: boolean;
   /** Keep Arabic diacritics (default: strip tashkeel — shared/tokens.ts policy). */
@@ -158,30 +162,49 @@ function createEngine(server: MoonshineServer, opts: MoonshineServerOptions): Mo
       if (topts.signal?.aborted) throw new Error("aborted");
       const t0 = performance.now();
 
-      const language: SttLanguage = topts.language ?? opts.language ?? "en";
-      const modelId = resolveModelId(opts.model, language);
-      const model = await ensureModel(server, modelId);
-
       // WAV PCM16 contract violations are a typed throw: the runner maps them
       // to 422 ("decode client-side"), and parseDocument's route falls through
-      // with a warning. Everything else about the audio is our problem.
+      // with a warning. Everything else about the audio is our problem. Parsed
+      // ONCE up front — both auto slots decode the same samples.
       const audio = wavToModelAudio(bytes, { maxSeconds: opts.maxSeconds ?? 60 });
 
-      const { ids, logProbs } =
-        model.kind === "streaming"
-          ? await decodeStreaming(model, audio.samples, topts.signal)
-          : await decodeBatch(model, audio.samples, topts.signal);
+      /** One forced-language decode: ensure model → decode loop → tokenizer. */
+      const decodeAs = async (language: SttLanguage): Promise<SttResult> => {
+        const modelId = resolveModelId(opts.model, language);
+        const model = await ensureModel(server, modelId);
+        const { ids, logProbs } =
+          model.kind === "streaming"
+            ? await decodeStreaming(model, audio.samples, topts.signal)
+            : await decodeBatch(model, audio.samples, topts.signal);
+        const raw = model.tokenizer.decodeIds(ids);
+        const text = opts.keepDiacritics ? raw : stripTashkeel(raw);
+        const confidence = tokenConfidence(logProbs, model.tokenizer, ids);
+        dbg(
+          `[moonshine-server] ${modelId} ${((performance.now() - t0) / 1000).toFixed(2)}s: ` +
+            `${(audio.samples.length / MODEL_SAMPLE_RATE).toFixed(1)}s audio (${audio.source.sampleRate}Hz ` +
+            `${audio.source.channels}ch) → ${ids.length} tokens, ${text.length} chars, conf ${confidence.toFixed(3)}.`,
+        );
+        return { text, confidence, language };
+      };
 
-      const raw = model.tokenizer.decodeIds(ids);
-      const text = opts.keepDiacritics ? raw : stripTashkeel(raw);
-      const confidence = tokenConfidence(logProbs, model.tokenizer, ids);
+      const requested: SttLanguage | "auto" = topts.language ?? opts.language ?? "auto";
+      if (requested === "auto") {
+        // language:"auto" — dual slot-1 decode + the shared evidence pick
+        // (stt/auto.ts). The engine stays gate-free (the runner service floors
+        // and escalates); the evidence-based pick itself is the honest answer.
+        const result = await transcribeAuto(decodeAs, {
+          signal: topts.signal,
+          onSlotError: (language, err) =>
+            dbg(
+              `[moonshine-server] auto: ${language} slot unavailable: ` +
+                `${err instanceof Error ? err.message : String(err)}`,
+            ),
+        });
+        dbg(`[moonshine-server] auto → ${result.language} (${result.text.length} chars)`);
+        return result;
+      }
 
-      dbg(
-        `[moonshine-server] ${modelId} ${((performance.now() - t0) / 1000).toFixed(2)}s: ` +
-          `${(audio.samples.length / MODEL_SAMPLE_RATE).toFixed(1)}s audio (${audio.source.sampleRate}Hz ` +
-          `${audio.source.channels}ch) → ${ids.length} tokens, ${text.length} chars, conf ${confidence.toFixed(3)}.`,
-      );
-      return { text, confidence, language };
+      return decodeAs(requested);
     },
 
     async warm(language: SttLanguage = "en"): Promise<void> {

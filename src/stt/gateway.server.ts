@@ -116,8 +116,10 @@ export function createServerSttGateway(opts: ServerSttOptions): SttGateway {
         );
         form.append("model", opts.model);
         form.append("response_format", "json");
+        // "auto" (or absent) = no hint: providers don't know the token, and the
+        // omission IS the hint-less call (their own detect, or none).
         const language = ctx.language ?? opts.language;
-        if (language) form.append("language", language);
+        if (language && language !== "auto") form.append("language", language);
         const temperature = opts.temperature ?? 0;
         if (temperature > 0) form.append("temperature", String(temperature));
 

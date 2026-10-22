@@ -2,6 +2,7 @@ import {
   createServerSttGateway,
   DEFAULT_STT_MODEL,
   ESCALATION_STT_MODEL,
+  pickAutoLanguage,
   sttFloorFor,
   type SttLanguage,
   type SttResult,
@@ -83,85 +84,6 @@ export interface SttServiceDeps {
 interface SlotAttempt {
   modelId: string;
   result: SttResult;
-}
-
-const ARABIC_SCRIPT = /\p{Script=Arabic}/u;
-
-/**
- * Degenerate-decode detector — the repetition-loop signature. A real
- * 2026-10-22 Arabic voice note through the EN model returned
- * "So, I have a question." ×10 at conf 0.9: greedy per-token confidence does
- * NOT catch this (a looping decoder is confident), so language selection
- * needs its own signal. Conservative on purpose — ≥12 words AND <35% unique,
- * so short legit replies ("yes yes I will send it") never trip it.
- */
-function isDegenerate(text: string): boolean {
-  const words = text.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length < 12) return false;
-  return new Set(words).size / words.length < 0.35;
-}
-
-/**
- * Language pick for language:"auto" from the two slot-1 attempts (a slot
- * that couldn't RUN loses to one that did — its failure is already a
- * warning). Rules, in order:
- *
- *   1. both decodes degenerate (no script signal left) → higher confidence wins
- *   2. AR decode carries Arabic script → ar (tiny-en's vocab has no Arabic
- *      script, so its presence is positive evidence the clip is Arabic — even
- *      when the AR decode itself loops; the walk's floor/gateway then judges it)
- *   3. EN degenerate, AR clean → ar (a looping EN decode is worthless; the
- *      Latin-script Arabic/dialect reading beats it)
- *   4. AR degenerate (no Arabic script), EN clean → en
- *   5. both clean, no Arabic script → en (the status-quo default)
- */
-function pickAutoLanguage(
-  en: SlotAttempt | null,
-  ar: SlotAttempt | null,
-): { language: SttLanguage; reason: string } {
-  if (!en && !ar) return { language: "en", reason: "no local slot-1 decode ran" };
-  if (!ar) return { language: "en", reason: "AR slot unavailable" };
-  if (!en) return { language: "ar", reason: "EN slot unavailable" };
-
-  const enConf = en.result.confidence ?? 0;
-  const arConf = ar.result.confidence ?? 0;
-  const enDegenerate = isDegenerate(en.result.text);
-  const arDegenerate = isDegenerate(ar.result.text);
-  const arHasArabicScript = ARABIC_SCRIPT.test(ar.result.text);
-
-  if (enDegenerate && arDegenerate) {
-    return enConf >= arConf
-      ? {
-          language: "en",
-          reason: `both decodes degenerate — higher confidence wins (EN ${enConf.toFixed(2)} vs AR ${arConf.toFixed(2)})`,
-        }
-      : {
-          language: "ar",
-          reason: `both decodes degenerate — higher confidence wins (AR ${arConf.toFixed(2)} vs EN ${enConf.toFixed(2)})`,
-        };
-  }
-  if (arHasArabicScript) {
-    return {
-      language: "ar",
-      reason: `Arabic script in AR decode (EN ${enConf.toFixed(2)}, AR ${arConf.toFixed(2)})`,
-    };
-  }
-  if (enDegenerate) {
-    return {
-      language: "ar",
-      reason: `EN decode degenerate (repetition loop, ${enConf.toFixed(2)}); AR decode clean (${arConf.toFixed(2)})`,
-    };
-  }
-  if (arDegenerate) {
-    return {
-      language: "en",
-      reason: `AR decode degenerate (repetition loop, ${arConf.toFixed(2)}); EN decode clean (${enConf.toFixed(2)})`,
-    };
-  }
-  return {
-    language: "en",
-    reason: `no Arabic script in AR decode (EN ${enConf.toFixed(2)}, AR ${arConf.toFixed(2)})`,
-  };
 }
 
 export function createSttService(deps: SttServiceDeps = {}): SttService {
@@ -249,7 +171,8 @@ export function createSttService(deps: SttServiceDeps = {}): SttService {
           decodeSlot(DEFAULT_STT_MODEL.en, "en", bytes, filename, options, warnings, signal),
           decodeSlot(DEFAULT_STT_MODEL.ar, "ar", bytes, filename, options, warnings, signal),
         ]);
-        const pick = pickAutoLanguage(en, ar);
+        // Shared evidence pick (package stt/auto.ts) over the two attempts.
+        const pick = pickAutoLanguage(en?.result ?? null, ar?.result ?? null);
         language = pick.language;
         const winner = pick.language === "en" ? en : ar;
         if (winner) {

@@ -267,7 +267,7 @@ describe("transcribe — EN streaming family", () => {
     const { mod, ort } = await freshModule();
     const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
 
-    const result = await engine.transcribe(testWav());
+    const result = await engine.transcribe(testWav(), { language: "en" });
     expect(result.text).toBe("hello world");
     expect(result.language).toBe("en");
     // Equal-length tokens: confidence = per-token prob = e^5 / (e^5 + 39).
@@ -304,7 +304,7 @@ describe("transcribe — EN streaming family", () => {
     tempDirs.push(root);
     const { mod, ort } = await freshModule();
     const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
-    const result = await engine.transcribe(testWav(0.001)); // 16 samples < frame_len 80
+    const result = await engine.transcribe(testWav(0.001), { language: "en" }); // 16 samples < frame_len 80
     expect(result.text).toBe("");
     expect(result.confidence).toBe(0);
     expect(ort.runs).toHaveLength(0);
@@ -322,7 +322,7 @@ describe("transcribe — EN batch family (base-en, forced; runner slot 2's model
       model: "moonshine-batch-base-en",
     });
 
-    const result = await engine.transcribe(testWav());
+    const result = await engine.transcribe(testWav(), { language: "en" });
     expect(result.text).toBe("hello world");
     expect(result.language).toBe("en");
 
@@ -363,7 +363,7 @@ describe("transcribe — EN batch family (base-en, forced; runner slot 2's model
       modelPath: root,
       model: "moonshine-batch-base-en",
     });
-    const result = await engine.transcribe(testWav());
+    const result = await engine.transcribe(testWav(), { language: "en" });
     expect(result.text).toBe("hello hello");
     const dec = ort.runs.filter((r) => r.path === "decoder_model_merged_int8.onnx");
     expect(dec).toHaveLength(3);
@@ -404,5 +404,34 @@ describe("transcribe — AR streaming tashkeel policy", () => {
     });
     const kept = await keepEngine.transcribe(testWav(), { language: "ar" });
     expect(kept.text).toBe("مُحَمَّد");
+  });
+});
+
+describe("transcribe — language:auto (the default)", () => {
+  it("dual-decodes both slot-1 models and picks AR on Arabic script", async () => {
+    const root = fakeModelRoot();
+    tempDirs.push(root);
+    // Both decoders play [20, 2]: the EN tokenizer has no id 20 (its decode is
+    // empty), the AR one reads "محمد" — the script evidence picks ar.
+    const { mod, ort } = await freshModule({ streamingTokens: [20, 2] });
+    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
+
+    const result = await engine.transcribe(testWav());
+    expect(result.language).toBe("ar");
+    expect(result.text).toBe("محمد");
+    // BOTH slot-1 models loaded (EN + AR streaming chains).
+    expect(ort.created).toContain("frontend.ort");
+    expect(ort.created).toContain("frontend.model.ort"); // the AR graph
+  });
+
+  it("picks EN when the AR decode carries no Arabic script", async () => {
+    const root = fakeModelRoot();
+    tempDirs.push(root);
+    const { mod } = await freshModule(); // EN "hello world"; AR reads EN ids → no script
+    const engine = await mod.createMoonshineServerEngine({ debug: false, modelPath: root });
+
+    const result = await engine.transcribe(testWav());
+    expect(result.language).toBe("en");
+    expect(result.text).toBe("hello world");
   });
 });

@@ -32,7 +32,7 @@ import type {
  */
 export function createSttGatewayEngine(
   gateway: SttGateway,
-  language?: "en" | "ar",
+  language?: "en" | "ar" | "auto",
 ): OcrEngine {
   return {
     name: "stt-gateway",
@@ -50,7 +50,7 @@ export function createSttGatewayEngine(
  * `setBrowserSttEngine` or inject it as `ParseOptions.sttEngine`; this adapter is
  * what the pipeline/worker put on the route deps.
  */
-export function sttEngineAsOcr(engine: SttEngine, language?: "en" | "ar"): OcrEngine {
+export function sttEngineAsOcr(engine: SttEngine, language?: "en" | "ar" | "auto"): OcrEngine {
   return {
     name: engine.name,
     available: engine.available,
