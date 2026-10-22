@@ -87,6 +87,9 @@ leg only runs when local extraction yields nothing, so calls **without**
 Speech-to-text with a **local-first escalation walk** (Track 3):
 
 ```
+language:"auto" → dual slot-1 decode (tiny-en + tiny-ar) → script/degeneracy/
+                     confidence evidence picks the language
+                     ▼
 WAV pre-flight → slot 1: Moonshine (language) → conf ≥ floor → done
                      │ under floor / unavailable
                      ├─ en → slot 2: Moonshine base-en → conf ≥ floor → done
@@ -105,7 +108,7 @@ POST the WAV. Anything else → `422` naming the contract.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `options.language` | `"en" \| "ar"` | `"en"` | Picks the slot-1 model (EN/AR streaming tiny) |
+| `options.language` | `"en" \| "ar" \| "auto"` | `"auto"` | `auto` dual-decodes both slot-1 tiny models and picks by script/degeneracy/confidence evidence (mixed en/ar voice notes); `"en"`/`"ar"` force one slot-1 model |
 | `options.keepDiacritics` | boolean | `false` | Default strips Arabic tashkeel |
 | `options.stt` | object | — | **Escalation-only** external gateway (below). Without it the runner is local-only: best-effort text + honest warnings, never an external call |
 

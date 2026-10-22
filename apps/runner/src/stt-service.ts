@@ -19,12 +19,20 @@ import type { RequestedTranscribeOptions } from "./types.js";
 /**
  * The /transcribe escalation walk (ROADMAP Track 3):
  *
+ *   language:"auto" ─► dual slot-1 decode (tiny-en + tiny-ar) ─ script/degeneracy/
+ *                        confidence evidence picks the language
+ *                        ▼
  *   WAV pre-flight ─► slot 1 moonshine(lang) ─ conf ≥ floor ─► done
  *                        │ under floor / unavailable
  *                        ├─ en ─► slot 2 moonshine-base-en ─ conf ≥ floor ─► done
  *                        └─ ar ───────────────────────────────────┐
  *                                                                  ▼
  *                    caller SttGateway (options.stt) ─► done / best-effort + honest warning
+ *
+ * Auto is the default (WhatsApp voice notes are mixed en/ar and callers like
+ * masteragent send no hint — DEC-087 amendment): an explicit "en" skips the
+ * dual decode; the winner of the auto pick enters the walk as an
+ * already-tried slot, so escalation continues exactly as before.
  *
  * Mirrors createLiteparseService: engines are lazy singletons (createMoonshineServerEngine
  * already shares one ort + model-cache singleton across every engine object), the service
@@ -77,14 +85,118 @@ interface SlotAttempt {
   result: SttResult;
 }
 
+const ARABIC_SCRIPT = /\p{Script=Arabic}/u;
+
+/**
+ * Degenerate-decode detector — the repetition-loop signature. A real
+ * 2026-10-22 Arabic voice note through the EN model returned
+ * "So, I have a question." ×10 at conf 0.9: greedy per-token confidence does
+ * NOT catch this (a looping decoder is confident), so language selection
+ * needs its own signal. Conservative on purpose — ≥12 words AND <35% unique,
+ * so short legit replies ("yes yes I will send it") never trip it.
+ */
+function isDegenerate(text: string): boolean {
+  const words = text.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length < 12) return false;
+  return new Set(words).size / words.length < 0.35;
+}
+
+/**
+ * Language pick for language:"auto" from the two slot-1 attempts (a slot
+ * that couldn't RUN loses to one that did — its failure is already a
+ * warning). Rules, in order:
+ *
+ *   1. both decodes degenerate (no script signal left) → higher confidence wins
+ *   2. AR decode carries Arabic script → ar (tiny-en's vocab has no Arabic
+ *      script, so its presence is positive evidence the clip is Arabic — even
+ *      when the AR decode itself loops; the walk's floor/gateway then judges it)
+ *   3. EN degenerate, AR clean → ar (a looping EN decode is worthless; the
+ *      Latin-script Arabic/dialect reading beats it)
+ *   4. AR degenerate (no Arabic script), EN clean → en
+ *   5. both clean, no Arabic script → en (the status-quo default)
+ */
+function pickAutoLanguage(
+  en: SlotAttempt | null,
+  ar: SlotAttempt | null,
+): { language: SttLanguage; reason: string } {
+  if (!en && !ar) return { language: "en", reason: "no local slot-1 decode ran" };
+  if (!ar) return { language: "en", reason: "AR slot unavailable" };
+  if (!en) return { language: "ar", reason: "EN slot unavailable" };
+
+  const enConf = en.result.confidence ?? 0;
+  const arConf = ar.result.confidence ?? 0;
+  const enDegenerate = isDegenerate(en.result.text);
+  const arDegenerate = isDegenerate(ar.result.text);
+  const arHasArabicScript = ARABIC_SCRIPT.test(ar.result.text);
+
+  if (enDegenerate && arDegenerate) {
+    return enConf >= arConf
+      ? {
+          language: "en",
+          reason: `both decodes degenerate — higher confidence wins (EN ${enConf.toFixed(2)} vs AR ${arConf.toFixed(2)})`,
+        }
+      : {
+          language: "ar",
+          reason: `both decodes degenerate — higher confidence wins (AR ${arConf.toFixed(2)} vs EN ${enConf.toFixed(2)})`,
+        };
+  }
+  if (arHasArabicScript) {
+    return {
+      language: "ar",
+      reason: `Arabic script in AR decode (EN ${enConf.toFixed(2)}, AR ${arConf.toFixed(2)})`,
+    };
+  }
+  if (enDegenerate) {
+    return {
+      language: "ar",
+      reason: `EN decode degenerate (repetition loop, ${enConf.toFixed(2)}); AR decode clean (${arConf.toFixed(2)})`,
+    };
+  }
+  if (arDegenerate) {
+    return {
+      language: "en",
+      reason: `AR decode degenerate (repetition loop, ${arConf.toFixed(2)}); EN decode clean (${enConf.toFixed(2)})`,
+    };
+  }
+  return {
+    language: "en",
+    reason: `no Arabic script in AR decode (EN ${enConf.toFixed(2)}, AR ${arConf.toFixed(2)})`,
+  };
+}
+
 export function createSttService(deps: SttServiceDeps = {}): SttService {
   const createEngine = deps.createEngine ?? ((opts) => createMoonshineServerEngine(opts));
   const modelPath = deps.modelPath;
 
+  /** One forced-model decode (auto mode's dual slot-1); null + warning when the slot can't run. */
+  async function decodeSlot(
+    modelId: string,
+    language: SttLanguage,
+    bytes: Uint8Array,
+    filename: string | undefined,
+    options: RequestedTranscribeOptions,
+    warnings: string[],
+    signal?: AbortSignal,
+  ): Promise<SlotAttempt | null> {
+    try {
+      const engine = await createEngine({
+        modelPath,
+        model: modelId,
+        keepDiacritics: options.keepDiacritics === true,
+      });
+      const result = await engine.transcribe(bytes, { language, filename, signal });
+      if (signal?.aborted) throw new Error("aborted");
+      return { modelId, result };
+    } catch (err) {
+      if (signal?.aborted) throw new Error("aborted");
+      warnings.push(`${modelId} unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }
+
   return {
     async transcribe(bytes, filename, options = {}, signal) {
       if (signal?.aborted) throw new Error("aborted");
-      const language: SttLanguage = options.language === "ar" ? "ar" : "en";
       const warnings: string[] = [];
       const attempts: SlotAttempt[] = [];
 
@@ -124,11 +236,57 @@ export function createSttService(deps: SttServiceDeps = {}): SttService {
         }
       }
 
-      // ── local slots: slot 1 per language, slot 2 (EN only) = strictly stronger model.
+      // ── language: "auto" (the default) dual-decodes BOTH slot-1 tiny models
+      // and picks per pickAutoLanguage; the winner enters the walk as an
+      // already-tried slot, so escalation continues exactly as an explicit
+      // language would. An explicit "en"/"ar" skips the dual decode entirely.
+      const requested: SttLanguage | "auto" = options.language ?? "auto";
+      const triedModels = new Set<string>();
+      let language: SttLanguage;
+
+      if (requested === "auto") {
+        const [en, ar] = await Promise.all([
+          decodeSlot(DEFAULT_STT_MODEL.en, "en", bytes, filename, options, warnings, signal),
+          decodeSlot(DEFAULT_STT_MODEL.ar, "ar", bytes, filename, options, warnings, signal),
+        ]);
+        const pick = pickAutoLanguage(en, ar);
+        language = pick.language;
+        const winner = pick.language === "en" ? en : ar;
+        if (winner) {
+          triedModels.add(winner.modelId);
+          attempts.push(winner);
+          const floor = sttFloorFor(winner.modelId);
+          const conf = winner.result.confidence ?? 0;
+          if (winner.result.text.trim() !== "" && conf >= floor) {
+            warnings.push(`auto: picked ${language} — ${pick.reason}`);
+            return {
+              text: winner.result.text,
+              language,
+              engine: winner.modelId,
+              confidence: winner.result.confidence ?? null,
+              warnings,
+            };
+          }
+          warnings.push(
+            `auto: picked ${language} — ${pick.reason}; winner under floor ` +
+              `${conf.toFixed(2)} < ${floor}, escalating`,
+          );
+        } else {
+          // Both slots failed to RUN — continue as en so the walk still
+          // reaches the gateway (its slots re-fail with their own warnings).
+          warnings.push(`auto: ${pick.reason}`);
+        }
+      } else {
+        language = requested;
+      }
+
+      // ── local slots: slot 1 per language (already tried in auto mode),
+      // slot 2 (EN only) = strictly stronger model.
       const slots = [DEFAULT_STT_MODEL[language]];
       if (ESCALATION_STT_MODEL[language]) slots.push(ESCALATION_STT_MODEL[language]!);
 
       for (const modelId of slots) {
+        if (triedModels.has(modelId)) continue;
         try {
           // Engines are thin closures over the shared model-cache singleton, so
           // per-request construction (for the per-request keepDiacritics flag)
@@ -217,7 +375,10 @@ export function createSttService(deps: SttServiceDeps = {}): SttService {
 
     async warm() {
       const engine = await createEngine({ modelPath });
+      // Both slot-1 models: the first AR voice note must not pay the load
+      // (six extra graphs load once at boot — they're in the image already).
       await engine.warm("en");
+      await engine.warm("ar");
     },
   };
 }

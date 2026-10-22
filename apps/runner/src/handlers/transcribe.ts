@@ -119,8 +119,13 @@ function validateOptions(options: RequestedTranscribeOptions | undefined): strin
   if (typeof options !== "object" || options === null || Array.isArray(options)) {
     return "options must be an object";
   }
-  if (options.language !== undefined && options.language !== "en" && options.language !== "ar") {
-    return 'options.language must be "en" or "ar"';
+  if (
+    options.language !== undefined &&
+    options.language !== "en" &&
+    options.language !== "ar" &&
+    options.language !== "auto"
+  ) {
+    return 'options.language must be "en", "ar", or "auto"';
   }
   if (options.keepDiacritics !== undefined && typeof options.keepDiacritics !== "boolean") {
     return "options.keepDiacritics must be a boolean";

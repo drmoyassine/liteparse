@@ -52,8 +52,12 @@ export interface RequestedSttOptions {
 }
 
 export interface RequestedTranscribeOptions {
-  /** "en" (default) or "ar" — selects the slot-1 local model. */
-  language?: "en" | "ar";
+  /**
+   * "auto" (default) dual-decodes both slot-1 tiny models and picks the
+   * language by script + degeneracy + confidence evidence; "en"/"ar" force
+   * one slot-1 model (legacy behavior).
+   */
+  language?: "en" | "ar" | "auto";
   /** Keep Arabic diacritics (default: the runner strips tashkeel). */
   keepDiacritics?: boolean;
   /** External gateway for escalations above the local cascade. */

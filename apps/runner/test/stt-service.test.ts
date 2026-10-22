@@ -89,22 +89,28 @@ describe("slot 1 — happy path", () => {
   it("resolves immediately when confidence clears the floor", async () => {
     const { service, createEngine } = buildService({
       [SLOT1_EN]: fakeEngine({ text: "hello world", confidence: 0.9 }),
+      [SLOT1_AR]: fakeEngine({ text: "hello world ar", confidence: 0.85, language: "ar" }),
     });
     const result = await service.transcribe(wavBytes(), "a.wav", {}, undefined);
     expect(result).toMatchObject({ text: "hello world", engine: SLOT1_EN, confidence: 0.9, language: "en" });
-    expect(result.warnings).toEqual([]);
-    expect(createEngine).toHaveBeenCalledTimes(1);
-    expect(createEngine.mock.calls[0]![0].model).toBe(SLOT1_EN);
+    expect(result.warnings.some((w) => w.includes("auto: picked en"))).toBe(true);
+    expect(createEngine.mock.calls.map((c) => c[0].model)).toEqual([SLOT1_EN, SLOT1_AR]);
   });
 
-  it("defaults to English and threads language + filename to the engine", async () => {
-    const engine = fakeEngine();
-    const { service } = buildService({ [SLOT1_EN]: engine });
-    await service.transcribe(wavBytes(), "note.wav", undefined, undefined);
-    expect(engine.transcribe).toHaveBeenCalledWith(
+  it("defaults to auto: dual-decodes both slot-1 models, threads language + filename", async () => {
+    const en = fakeEngine();
+    const ar = fakeEngine({ text: "hola", confidence: 0.8, language: "ar" });
+    const { service } = buildService({ [SLOT1_EN]: en, [SLOT1_AR]: ar });
+    const result = await service.transcribe(wavBytes(), "note.wav", undefined, undefined);
+    expect(en.transcribe).toHaveBeenCalledWith(
       wavBytes(), // deterministic fixture → byte-identical
       expect.objectContaining({ language: "en", filename: "note.wav" }),
     );
+    expect(ar.transcribe).toHaveBeenCalledWith(
+      wavBytes(),
+      expect.objectContaining({ language: "ar", filename: "note.wav" }),
+    );
+    expect(result.language).toBe("en"); // no Arabic script → status-quo default
   });
 
   it("threads keepDiacritics into the engine options", async () => {
@@ -119,23 +125,25 @@ describe("escalation", () => {
   it("EN under the floor escalates to base-en", async () => {
     const { service, createEngine } = buildService({
       [SLOT1_EN]: fakeEngine({ text: "helo wrld", confidence: 0.3 }),
+      [SLOT1_AR]: fakeEngine({ text: "helo wrld ar", confidence: 0.3, language: "ar" }),
       [SLOT2_EN]: fakeEngine({ text: "hello world", confidence: 0.92 }),
     });
     const result = await service.transcribe(wavBytes(), "a.wav", {}, undefined);
     expect(result.engine).toBe(SLOT2_EN);
     expect(result.confidence).toBe(0.92);
-    expect(result.warnings.some((w) => w.includes(SLOT1_EN) && w.includes("floor"))).toBe(true);
-    expect(createEngine.mock.calls.map((c) => c[0].model)).toEqual([SLOT1_EN, SLOT2_EN]);
+    expect(result.warnings.some((w) => w.includes("winner under floor"))).toBe(true);
+    expect(createEngine.mock.calls.map((c) => c[0].model)).toEqual([SLOT1_EN, SLOT1_AR, SLOT2_EN]);
   });
 
   it("escalates on an empty transcript even at high confidence", async () => {
     const { service } = buildService({
       [SLOT1_EN]: fakeEngine({ text: "  ", confidence: 0.99 }),
+      [SLOT1_AR]: fakeEngine({ text: "hola", confidence: 0.9, language: "ar" }),
       [SLOT2_EN]: fakeEngine({ text: "hello", confidence: 0.9 }),
     });
     const result = await service.transcribe(wavBytes(), "a.wav", {}, undefined);
     expect(result.engine).toBe(SLOT2_EN);
-    expect(result.warnings.some((w) => w.includes("empty transcript"))).toBe(true);
+    expect(result.warnings.some((w) => w.includes("winner under floor"))).toBe(true);
   });
 
   it("an unavailable slot 1 records a warning and falls through to slot 2", async () => {
@@ -143,7 +151,7 @@ describe("escalation", () => {
       [SLOT1_EN]: rejectedEngine("Moonshine model moonshine-streaming-tiny-en incomplete"),
       [SLOT2_EN]: fakeEngine({ text: "hello", confidence: 0.9 }),
     });
-    const result = await service.transcribe(wavBytes(), "a.wav", {}, undefined);
+    const result = await service.transcribe(wavBytes(), "a.wav", { language: "en" }, undefined);
     expect(result.engine).toBe(SLOT2_EN);
     expect(result.warnings.some((w) => w.includes("unavailable"))).toBe(true);
   });
@@ -174,6 +182,7 @@ describe("escalation", () => {
     vi.stubGlobal("fetch", gatewayFetch("gateway text"));
     const { service } = buildService({
       [SLOT1_EN]: fakeEngine({ text: "a", confidence: 0.2 }),
+      [SLOT1_AR]: fakeEngine({ text: "hola", confidence: 0.3, language: "ar" }),
       [SLOT2_EN]: fakeEngine({ text: "b", confidence: 0.3 }),
     });
     const result = await service.transcribe(
@@ -303,11 +312,97 @@ describe("abort handling", () => {
   });
 });
 
+describe('language:"auto" — the default (mixed en/ar voice notes)', () => {
+  it("picks AR on Arabic script even when the EN decode is confident", async () => {
+    // 2026-10-22 production case, generalized: tiny-en's vocab cannot produce
+    // Arabic script, so its presence is positive evidence the clip is Arabic.
+    const { service } = buildService({
+      [SLOT1_EN]: fakeEngine({ text: "so i have a question about the university", confidence: 0.9 }),
+      [SLOT1_AR]: fakeEngine({ text: "عندي سؤال عن الجامعة", confidence: 0.8, language: "ar" }),
+    });
+    const result = await service.transcribe(wavBytes(), "a.wav", {}, undefined);
+    expect(result).toMatchObject({
+      language: "ar",
+      engine: SLOT1_AR,
+      text: "عندي سؤال عن الجامعة",
+      confidence: 0.8,
+    });
+    expect(result.warnings.some((w) => w.includes("Arabic script"))).toBe(true);
+  });
+
+  it("picks AR when the EN decode is a repetition loop and AR is clean Latin", async () => {
+    const loop = Array(10).fill("so i have a question").join(" "); // 50 words, 5 unique
+    const { service } = buildService({
+      [SLOT1_EN]: fakeEngine({ text: loop, confidence: 0.9 }),
+      [SLOT1_AR]: fakeEngine({ text: "3andi sou2al 3an el jam3a", confidence: 0.7, language: "ar" }),
+    });
+    const result = await service.transcribe(wavBytes(), "a.wav", {}, undefined);
+    expect(result).toMatchObject({ language: "ar", engine: SLOT1_AR });
+    expect(result.warnings.some((w) => w.includes("repetition loop"))).toBe(true);
+  });
+
+  it("picks EN when the AR decode loops without producing Arabic script", async () => {
+    const loop = Array(10).fill("salam salam salam").join(" ");
+    const { service } = buildService({
+      [SLOT1_EN]: fakeEngine({ text: "hello there how are you doing today", confidence: 0.85 }),
+      [SLOT1_AR]: fakeEngine({ text: loop, confidence: 0.9, language: "ar" }),
+    });
+    const result = await service.transcribe(wavBytes(), "a.wav", {}, undefined);
+    expect(result).toMatchObject({ language: "en", engine: SLOT1_EN });
+  });
+
+  it("both decodes degenerate: higher confidence wins", async () => {
+    const enLoop = Array(10).fill("i have a question about").join(" ");
+    const arLoop = Array(10).fill("salam alaikum salam alaikum").join(" ");
+    const { service } = buildService({
+      [SLOT1_EN]: fakeEngine({ text: enLoop, confidence: 0.4 }),
+      [SLOT1_AR]: fakeEngine({ text: arLoop, confidence: 0.75, language: "ar" }),
+    });
+    const result = await service.transcribe(wavBytes(), "a.wav", {}, undefined);
+    expect(result).toMatchObject({ language: "ar", engine: SLOT1_AR });
+    expect(result.warnings.some((w) => w.includes("higher confidence wins"))).toBe(true);
+  });
+
+  it("winner under the floor escalates with the CHOSEN language (ar → gateway, slot 2 skipped)", async () => {
+    vi.stubGlobal("fetch", gatewayFetch("مرحبا بالعالم"));
+    const baseEn = fakeEngine();
+    const { service, createEngine } = buildService({
+      [SLOT1_EN]: fakeEngine({ text: "what what what", confidence: 0.4 }),
+      [SLOT1_AR]: fakeEngine({ text: "شكرا جزيلا على المساعدة", confidence: 0.3, language: "ar" }),
+      [SLOT2_EN]: baseEn,
+    });
+    const result = await service.transcribe(
+      wavBytes(),
+      "a.wav",
+      { stt: { endpoint: "https://gw.example/v1/audio/transcriptions", apiKey: "sk-x", model: "m" } },
+      undefined,
+    );
+    expect(result).toMatchObject({
+      language: "ar",
+      engine: "stt-gateway",
+      text: "مرحبا بالعالم",
+      confidence: null,
+    });
+    expect(createEngine.mock.calls.map((c) => c[0].model)).toEqual([SLOT1_EN, SLOT1_AR]); // slot 2 skipped
+    expect(baseEn.transcribe).not.toHaveBeenCalled();
+  });
+
+  it("an explicit language never dual-decodes (legacy behavior)", async () => {
+    const { service, createEngine } = buildService({
+      [SLOT1_AR]: fakeEngine({ text: "مرحبا", confidence: 0.9, language: "ar" }),
+    });
+    const result = await service.transcribe(wavBytes(), "a.wav", { language: "ar" }, undefined);
+    expect(result).toMatchObject({ language: "ar", engine: SLOT1_AR });
+    expect(createEngine).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("warm", () => {
-  it("creates the default engine and warms EN (slot 1)", async () => {
+  it("creates the default engine and warms BOTH slot-1 languages", async () => {
     const engine = fakeEngine();
     const { service } = buildService({ [SLOT1_EN]: engine });
     await service.warm();
     expect(engine.warm).toHaveBeenCalledWith("en");
+    expect(engine.warm).toHaveBeenCalledWith("ar");
   });
 });

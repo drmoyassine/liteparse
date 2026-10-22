@@ -96,11 +96,13 @@ export function createOpenApiDocument(version: string): Record<string, unknown> 
           tags: ["transcribe"],
           summary: "Transcribe speech (local-first escalation)",
           description:
-            "Slot 1: Moonshine streaming-tiny (EN or AR per options.language) → on low " +
-            "confidence, EN escalates to slot 2 Moonshine base-en → then (any language) to the " +
-            "caller's STT gateway if provided. THE AUDIO CONTRACT IS WAV PCM16 (mono 16 kHz " +
-            "ideal; other rates/channels are mixed + resampled server-side) — browsers decode " +
-            "webm/opus/m4a client-side and POST the WAV. Anything else is a 422 naming the contract.",
+            "Slot 1: Moonshine streaming-tiny (language auto-detected by default — both " +
+            "tiny models decode and script/degeneracy/confidence evidence picks; or forced " +
+            "per options.language) → on low confidence, EN escalates to slot 2 Moonshine " +
+            "base-en → then (any language) to the caller's STT gateway if provided. THE AUDIO " +
+            "CONTRACT IS WAV PCM16 (mono 16 kHz ideal; other rates/channels are mixed + " +
+            "resampled server-side) — browsers decode webm/opus/m4a client-side and POST the " +
+            "WAV. Anything else is a 422 naming the contract.",
           requestBody: {
             required: true,
             content: {
@@ -235,7 +237,12 @@ export function createOpenApiDocument(version: string): Record<string, unknown> 
         TranscribeOptions: {
           type: "object",
           properties: {
-            language: { enum: ["en", "ar"], default: "en", description: "Picks the slot-1 model (EN/AR streaming tiny)" },
+            language: {
+              enum: ["en", "ar", "auto"],
+              default: "auto",
+              description:
+                "auto: dual slot-1 decode with script/degeneracy/confidence language pick. en/ar: force one slot-1 model",
+            },
             keepDiacritics: { type: "boolean", default: false, description: "Default strips Arabic tashkeel" },
             stt: { $ref: "#/components/schemas/SttConfig" },
           },
